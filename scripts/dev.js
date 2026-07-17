@@ -18,14 +18,17 @@ const viteProcess = spawn('npx', ['vite', 'build', '--watch'], {
   shell: true,
 });
 
-// 2. Helper to check if dist/manifest.json exists before launching Chrome
+// 2. Launch Chrome with forced extension loading flags
 function launchChrome() {
-  console.log('[TubePark Dev] Launching Google Chrome with TubePark extension pre-loaded...');
+  console.log('[TubePark Dev] Launching Google Chrome with TubePark extension...');
 
   const chromeExecutable = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const args = [
+    `--disable-extensions-except=${distDir}`,
     `--load-extension=${distDir}`,
     `--user-data-dir=${userProfileDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
     'https://www.youtube.com',
   ];
 
