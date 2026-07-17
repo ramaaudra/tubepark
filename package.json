@@ -4,8 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/dev.js",
-    "build": "vite build",
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -16,8 +17,10 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@types/chrome": "^0.0.308",
     "@types/node": "^22.10.0",
+    "@wxt-dev/module-svelte": "^2.0.5",
     "typescript": "^5.7.2",
     "vite": "^6.0.0",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "wxt": "^0.20.27"
   }
 }

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getQueue, getCapacity, removeVideo, toggleWatching } from '../shared/storage';
-  import { sweepExpiredVideos } from '../shared/expiry';
-  import { groupAndSortVideos, openOrUpdateYouTubeTab } from '../shared/grouping';
-  import Thumbnail from '../components/Thumbnail.svelte';
-  import type { ParkedVideo, CapacityState } from '../shared/types';
+  import { getQueue, getCapacity, removeVideo, toggleWatching } from '../../shared/storage';
+  import { sweepExpiredVideos } from '../../shared/expiry';
+  import { groupAndSortVideos, openOrUpdateYouTubeTab } from '../../shared/grouping';
+  import Thumbnail from '../../components/Thumbnail.svelte';
+  import type { ParkedVideo, CapacityState } from '../../shared/types';
 
   let queue = $state<ParkedVideo[]>([]);
   let capacity = $state<CapacityState>({ status: 'safe', count: 0, max: 200, percentage: 0 });
@@ -42,7 +42,6 @@
 </script>
 
 <main class="sidepanel-app">
-  <!-- Header -->
   <header class="header">
     <div class="brand">
       <div class="logo">
@@ -61,7 +60,6 @@
     </div>
   </header>
 
-  <!-- Capacity Warning -->
   {#if capacity.status === 'warning' || capacity.status === 'full'}
     <div class="warning-banner" class:banner-full={capacity.status === 'full'}>
       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
@@ -77,7 +75,6 @@
     </div>
   {/if}
 
-  <!-- Content Sections -->
   <div class="content-body">
     {#if queue.length === 0}
       <div class="empty-state">
@@ -86,7 +83,6 @@
         <p>Arahkan kursor ke video di YouTube lalu tekan tombol <strong>P</strong> atau klik kanan link video untuk memasukkannya ke queue.</p>
       </div>
     {:else}
-      <!-- 1. Watching Sticky Section -->
       {#if grouped.watchingSection.length > 0}
         <section class="section">
           <div class="section-title watching-title">
@@ -128,7 +124,6 @@
         </section>
       {/if}
 
-      <!-- 2. Today / Recent Section -->
       {#if grouped.todaySection.length > 0}
         <section class="section">
           <div class="section-title">
@@ -169,7 +164,6 @@
         </section>
       {/if}
 
-      <!-- 3. Older Section -->
       {#if grouped.olderSection.length > 0}
         <section class="section">
           <div class="section-title">

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getQueue, getCapacity, parkVideo, removeVideo } from '../shared/storage';
-  import { sweepExpiredVideos } from '../shared/expiry';
-  import { extractYouTubeVideoId } from '../shared/capture-predicates';
-  import { filterIdleWatchTabs, isWatchTabUrl } from '../shared/tab-helpers';
-  import type { ParkedVideo, CapacityState } from '../shared/types';
+  import { getQueue, getCapacity, parkVideo, removeVideo } from '../../shared/storage';
+  import { sweepExpiredVideos } from '../../shared/expiry';
+  import { extractYouTubeVideoId } from '../../shared/capture-predicates';
+  import { filterIdleWatchTabs, isWatchTabUrl } from '../../shared/tab-helpers';
+  import type { ParkedVideo, CapacityState } from '../../shared/types';
 
   let queue = $state<ParkedVideo[]>([]);
   let capacity = $state<CapacityState>({ status: 'safe', count: 0, max: 200, percentage: 0 });
@@ -107,7 +107,6 @@
 </script>
 
 <main class="popup-app">
-  <!-- Header -->
   <header class="header">
     <div class="brand">
       <div class="logo">
@@ -122,7 +121,6 @@
     </div>
   </header>
 
-  <!-- Capacity Warning Banner (>=80%) -->
   {#if capacity.status === 'warning' || capacity.status === 'full'}
     <div class="warning-banner" class:banner-full={capacity.status === 'full'}>
       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
@@ -138,7 +136,6 @@
     </div>
   {/if}
 
-  <!-- Tab Actions -->
   <section class="actions-section">
     <div class="tab-info-row">
       <span class="tab-icon">📺</span>
@@ -165,7 +162,6 @@
     </div>
   </section>
 
-  <!-- Quick View (Recent 5-10 Items) -->
   <section class="queue-section">
     <div class="section-header">
       <h2>Terbaru di Queue</h2>

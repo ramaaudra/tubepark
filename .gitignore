@@ -1,4 +1,7 @@
 node_modules
 dist
+.output
+.wxt
 .chrome-dev-profile
+.chrome-test*
 .DS_Store
