@@ -56,7 +56,6 @@ export function flyChipPath(from: Point, to: Point): FlyChipPath {
 	const dx = to.x - from.x;
 	const dy = to.y - from.y;
 	const distance = Math.hypot(dx, dy);
-	const arc =
-		distance === 0 ? 0 : Math.min(64, Math.max(24, distance * 0.25));
+	const arc = distance === 0 ? 0 : Math.min(64, Math.max(24, distance * 0.25));
 	return { dx, dy, arc };
 }

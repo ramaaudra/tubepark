@@ -1,9 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { flip } from 'svelte/animate';
   import { getQueue, getCapacity, parkVideo, removeVideo } from '../../shared/storage';
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import Thumbnail from '../../components/Thumbnail.svelte';
+  import Icon from '../../components/Icon.svelte';
+  import ParkBadge from '../../components/ParkBadge.svelte';
+  import ParkMeter from '../../components/ParkMeter.svelte';
+  import Equalizer from '../../components/Equalizer.svelte';
+  import { parkIn, parkOut } from '../../components/transitions';
+  import { flyChip } from '../../components/fly-chip';
   import type { ParkedVideo, CapacityState } from '../../shared/types';
 
   let queue = $state<ParkedVideo[]>([]);
@@ -12,6 +19,11 @@
   let currentTabIsWatch = $state<boolean>(false);
   let currentTabInfo = $state<{ id?: number; title?: string; url?: string } | null>(null);
   let nowPlaying = $state<NowPlayingTab | null>(null);
+
+  let reduced = $state(false);
+  let parkBtnEl = $state<HTMLButtonElement | null>(null);
+  let parkAllBtnEl = $state<HTMLButtonElement | null>(null);
+  let listAnchorEl = $state<HTMLElement | null>(null);
 
   async function loadData() {
     queue = await getQueue();
@@ -28,11 +40,17 @@
   }
 
   onMount(() => {
+    reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     loadData();
     if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       chrome.storage.onChanged.addListener(loadData);
     }
   });
+
+  function launchChip(from: Element | null, label?: string) {
+    if (!from || !listAnchorEl) return;
+    flyChip(from, listAnchorEl, { reduced, label });
+  }
 
   async function handleParkCurrentTab() {
     if (!currentTabInfo?.url) return;
@@ -48,6 +66,7 @@
     });
 
     if (result.success || result.duplicate) {
+      launchChip(parkBtnEl);
       if (currentTabInfo.id) await tabOps.closeTab(currentTabInfo.id);
     }
     await loadData();
@@ -57,6 +76,7 @@
     const watchTabs = await tabOps.getWatchTabs();
     const activeTab = await tabOps.getActiveTab();
 
+    let parked = 0;
     for (const tab of watchTabs) {
       if (activeTab && tab.id === activeTab.id) continue;
       if (!tab.url) continue;
@@ -72,9 +92,11 @@
       });
 
       if (result.success || result.duplicate) {
+        parked += 1;
         if (tab.id) await tabOps.closeTab(tab.id);
       }
     }
+    if (parked > 0) launchChip(parkAllBtnEl, `\u00d7${parked}`);
     await loadData();
   }
 
@@ -99,31 +121,27 @@
 
   const upNextCount = $derived(queue.filter((v) => v.pinned).length);
   const baruCount = $derived(queue.filter((v) => !v.pinned).length);
+
+  const nowPlayingTitle = $derived(
+    nowPlaying ? (queue.find((v) => v.id === nowPlaying?.videoId)?.title ?? nowPlaying.videoId) : ''
+  );
 </script>
 
 <main class="popup-app">
   <header class="header">
     <div class="brand">
-      <div class="logo">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-        </svg>
-      </div>
-      <span class="title">TubePark</span>
+      <ParkBadge size={26} />
+      <span class="wordmark">TubePark</span>
     </div>
-    <div class="count-badge" class:warning={capacity.status === 'warning'} class:full={capacity.status === 'full'}>
-      {capacity.count}/{capacity.max}
-    </div>
+    <ParkMeter count={capacity.count} max={capacity.max} status={capacity.status} />
   </header>
 
   {#if capacity.status === 'warning' || capacity.status === 'full'}
-    <div class="warning-banner" class:banner-full={capacity.status === 'full'}>
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-        <path d="M12 2L1 21h22L12 2zm1 14h-2v-2h2v2zm0-4h-2V10h2v2z"/>
-      </svg>
+    <div class="banner" class:banner-full={capacity.status === 'full'}>
+      <Icon name="warning" size={16} />
       <span>
         {#if capacity.status === 'full'}
-          Queue Penuh! Harap tonton atau hapus video.
+          Queue penuh! Tonton atau hapus video dulu.
         {:else}
           Queue hampir penuh ({capacity.count}/{capacity.max})
         {/if}
@@ -131,69 +149,78 @@
     </div>
   {/if}
 
-  <section class="actions-section">
-    <div class="tab-info-row">
-      <span class="tab-icon">📺</span>
-      <span class="tab-stat">{openWatchTabCount} tab video YouTube terbuka</span>
+  <section class="actions">
+    <div class="tab-info">
+      <Icon name="monitorPlay" size={15} />
+      <span>{openWatchTabCount} tab video YouTube terbuka</span>
     </div>
 
-    <div class="button-group">
+    <div class="buttons">
       {#if currentTabIsWatch}
-        <button class="btn btn-primary" onclick={handleParkCurrentTab}>
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-          </svg>
+        <button class="btn btn-primary" bind:this={parkBtnEl} onclick={handleParkCurrentTab}>
+          <ParkBadge size={16} />
           Park Tab Ini & Tutup
         </button>
       {/if}
 
       <button
         class="btn btn-secondary"
+        bind:this={parkAllBtnEl}
         onclick={handleParkAll}
         disabled={openWatchTabCount === 0}
       >
+        <Icon name="queue" size={15} />
         Park Semua Tab YT
       </button>
     </div>
   </section>
 
   {#if nowPlaying}
-    <section class="now-playing-section">
-      <span class="np-label">▶ Now Playing</span>
-      <span class="np-title">{queue.find((v) => v.id === nowPlaying?.videoId)?.title ?? nowPlaying.videoId}</span>
+    <section class="now-playing">
+      <Equalizer />
+      <div class="np-text">
+        <span class="np-label">Now Playing</span>
+        <span class="np-title">{nowPlayingTitle}</span>
+      </div>
     </section>
   {/if}
 
-  <section class="queue-section">
-    <div class="section-header">
-      <h2>📌 {upNextCount} Up Next • 📅 {baruCount} Baru</h2>
-      <button class="btn-text" onclick={handleOpenSidePanel}>
-        Side Panel &rarr;
+  <section class="queue">
+    <div class="queue-head" bind:this={listAnchorEl}>
+      <div class="counts">
+        <span class="count-chip"><Icon name="pin" size={12} />{upNextCount} Up Next</span>
+        <span class="count-chip"><Icon name="clock" size={12} />{baruCount} Baru</span>
+      </div>
+      <button class="btn-link" onclick={handleOpenSidePanel}>
+        <Icon name="sidebar" size={14} />
+        Side Panel
       </button>
     </div>
 
     {#if recentItems.length === 0}
-      <div class="empty-state">
+      <div class="empty">
+        <ParkBadge size={30} />
         <p>Belum ada video di-park</p>
-        <span class="subtext">Hover video di YouTube, klik 📌</span>
+        <span class="empty-sub">Hover video di YouTube, tekan <kbd>P</kbd></span>
       </div>
     {:else}
-      <ul class="recent-list">
-        {#each recentItems as video (video.id)}
-          <li class="item-card">
-            <div class="thumb-wrapper" onclick={() => handlePlay(video.id)}>
+      <ul class="recent">
+        {#each recentItems as video, i (video.id)}
+          <li
+            class="card"
+            in:parkIn={{ delay: reduced ? 0 : i * 40, reduced }}
+            out:parkOut={{ reduced }}
+            animate:flip={{ duration: reduced ? 150 : 300 }}
+          >
+            <button class="thumb" onclick={() => handlePlay(video.id)} aria-label="Putar {video.title}">
               <Thumbnail videoId={video.id} channel={video.channel} />
+            </button>
+            <div class="card-body">
+              <span class="card-title">{video.title}</span>
+              <span class="card-meta">{video.channel}</span>
             </div>
-            <div class="item-details">
-              <span class="item-title">{video.title}</span>
-              <span class="item-channel">{video.channel}</span>
-            </div>
-            <button
-              class="btn-remove"
-              title="Remove"
-              onclick={() => handleRemove(video.id)}
-            >
-              &times;
+            <button class="icon-btn danger" title="Hapus" onclick={() => handleRemove(video.id)}>
+              <Icon name="x" size={16} />
             </button>
           </li>
         {/each}
@@ -203,15 +230,11 @@
 </main>
 
 <style>
-  :global(:root) {
-    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  }
-
   .popup-app {
     width: 330px;
-    background-color: #0f0f12;
-    color: #f3f4f6;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: var(--tp-bg);
+    color: var(--tp-text);
+    font-family: var(--tp-font);
     padding: 14px;
     box-sizing: border-box;
   }
@@ -221,83 +244,55 @@
     justify-content: space-between;
     align-items: center;
     padding-bottom: 12px;
-    border-bottom: 1px solid #27272a;
+    border-bottom: 1px solid var(--tp-border);
   }
 
   .brand {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
   }
 
-  .logo {
-    width: 28px;
-    height: 28px;
-    background: linear-gradient(135deg, #ff0000, #cc0000);
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-  }
-
-  .title {
-    font-weight: 700;
-    font-size: 16px;
+  .wordmark {
+    font-weight: 800;
+    font-size: 15px;
     letter-spacing: -0.02em;
+    color: var(--tp-text);
   }
 
-  .count-badge {
-    background-color: #27272a;
-    color: #a1a1aa;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 12px;
-
-    &.warning {
-      background-color: #451a03;
-      color: #fde047;
-    }
-    &.full {
-      background-color: #450a0a;
-      color: #fca5a5;
-    }
-  }
-
-  .warning-banner {
+  .banner {
     margin-top: 10px;
-    background-color: #451a03;
-    border: 1px solid #78350f;
-    color: #fde047;
+    background: var(--tp-warn-bg);
+    border: 1px solid var(--tp-warn-border);
+    color: var(--tp-warn-text);
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--tp-r-btn);
     font-size: 12px;
     display: flex;
     align-items: center;
     gap: 8px;
-
-    &.banner-full {
-      background-color: #450a0a;
-      border-color: #7f1d1d;
-      color: #fca5a5;
-    }
   }
 
-  .actions-section {
+  .banner.banner-full {
+    background: var(--tp-danger-soft);
+    border-color: var(--tp-danger);
+    color: var(--tp-danger);
+  }
+
+  .actions {
     margin-top: 12px;
   }
 
-  .tab-info-row {
+  .tab-info {
     display: flex;
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: #a1a1aa;
+    color: var(--tp-text-2);
     margin-bottom: 8px;
   }
 
-  .button-group {
+  .buttons {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -307,180 +302,254 @@
     font-family: inherit;
     font-size: 13px;
     font-weight: 600;
-    padding: 8px 12px;
-    border-radius: 8px;
-    border: none;
+    padding: 9px 12px;
+    border-radius: var(--tp-r-btn);
+    border: 1px solid transparent;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    transition: transform 160ms var(--ease-out), background-color 160ms var(--ease-out);
+    gap: 7px;
+    transition:
+      transform var(--tp-dur-press) var(--tp-ease-snappy),
+      background-color var(--tp-dur-micro) ease,
+      box-shadow var(--tp-dur-micro) ease;
+  }
 
-    &:active {
-      transform: scale(0.97);
-    }
+  .btn:active {
+    transform: scale(0.96);
+  }
 
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      transform: none;
-    }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
   }
 
   .btn-primary {
-    background-color: #ff0000;
-    color: white;
+    background: var(--tp-accent);
+    color: var(--tp-accent-contrast);
+    box-shadow: var(--tp-shadow-card);
+  }
 
-    &:hover:not(:disabled) {
-      background-color: #dc2626;
-    }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--tp-accent-hover);
   }
 
   .btn-secondary {
-    background-color: #27272a;
-    color: #e4e4e7;
-
-    &:hover:not(:disabled) {
-      background-color: #3f3f46;
-    }
+    background: var(--tp-surface);
+    color: var(--tp-text);
+    border-color: var(--tp-border);
   }
 
-  .now-playing-section {
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--tp-surface-2);
+  }
+
+  .now-playing {
     margin-top: 12px;
-    padding: 8px 10px;
-    background-color: #1c1114;
-    border: 1px solid #7f1d1d;
-    border-radius: 8px;
+    padding: 9px 11px;
+    background: var(--tp-accent-soft);
+    border: 1px solid var(--tp-border);
+    border-radius: var(--tp-r-btn);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .np-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
+    min-width: 0;
   }
 
   .np-label {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 700;
-    color: #ef4444;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
+    color: var(--tp-accent);
   }
 
   .np-title {
     font-size: 12px;
-    color: #f4f4f5;
+    color: var(--tp-text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .queue-section {
+  .queue {
     margin-top: 16px;
-    border-top: 1px solid #27272a;
+    border-top: 1px solid var(--tp-border);
     padding-top: 12px;
   }
 
-  .section-header {
+  .queue-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
-
-    h2 {
-      font-size: 12px;
-      font-weight: 600;
-      color: #a1a1aa;
-      margin: 0;
-    }
+    margin-bottom: 10px;
   }
 
-  .btn-text {
+  .counts {
+    display: flex;
+    gap: 6px;
+  }
+
+  .count-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--tp-text-2);
+    background: var(--tp-surface);
+    border: 1px solid var(--tp-border);
+    padding: 3px 8px;
+    border-radius: var(--tp-r-chip);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .btn-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     background: none;
     border: none;
-    color: #ff4d4d;
+    color: var(--tp-accent);
     font-size: 12px;
     font-weight: 600;
+    font-family: inherit;
     cursor: pointer;
     padding: 0;
-
-    &:hover {
-      text-decoration: underline;
-    }
   }
 
-  .empty-state {
+  .btn-link:hover {
+    color: var(--tp-accent-hover);
+  }
+
+  .empty {
     text-align: center;
-    padding: 16px 0;
-    color: #71717a;
-
-    p {
-      margin: 0;
-      font-size: 13px;
-    }
-    .subtext {
-      font-size: 11px;
-    }
+    padding: 18px 0 8px;
+    color: var(--tp-text-3);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
   }
 
-  .recent-list {
+  .empty p {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--tp-text-2);
+    font-weight: 500;
+  }
+
+  .empty-sub {
+    font-size: 11px;
+  }
+
+  kbd {
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    background: var(--tp-surface-2);
+    border: 1px solid var(--tp-border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--tp-text-2);
+  }
+
+  .recent {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 7px;
   }
 
-  .item-card {
-    background-color: #18181b;
-    border: 1px solid #27272a;
-    border-radius: 6px;
-    padding: 8px 10px;
+  .card {
+    background: var(--tp-surface);
+    border: 1px solid var(--tp-border);
+    border-radius: var(--tp-r-card);
+    padding: 8px;
     display: flex;
     align-items: center;
     gap: 10px;
-
-    &:hover {
-      background-color: #27272a;
-    }
+    box-shadow: var(--tp-shadow-card);
+    transition:
+      transform var(--tp-dur-micro) var(--tp-ease-gentle),
+      box-shadow var(--tp-dur-micro) ease,
+      border-color var(--tp-dur-micro) ease;
   }
 
-  .thumb-wrapper {
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--tp-shadow-lift);
+    border-color: var(--tp-accent);
+  }
+
+  .thumb {
+    padding: 0;
+    border: none;
+    background: none;
     cursor: pointer;
     flex-shrink: 0;
+    border-radius: 6px;
+    line-height: 0;
   }
 
-  .item-details {
+  .card-body {
     display: flex;
     flex-direction: column;
+    gap: 2px;
     overflow: hidden;
     flex: 1;
     min-width: 0;
   }
 
-  .item-title {
-    font-size: 12px;
+  .card-title {
+    font-size: 12.5px;
     font-weight: 500;
-    color: #f4f4f5;
+    color: var(--tp-text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .item-channel {
+  .card-meta {
     font-size: 11px;
-    color: #a1a1aa;
+    color: var(--tp-text-3);
   }
 
-  .btn-remove {
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: none;
-    color: #71717a;
-    font-size: 16px;
+    color: var(--tp-text-3);
     cursor: pointer;
-    padding: 0 4px;
+    padding: 4px;
+    border-radius: 6px;
     flex-shrink: 0;
+    transition:
+      color var(--tp-dur-micro) ease,
+      background-color var(--tp-dur-micro) ease,
+      transform var(--tp-dur-press) var(--tp-ease-snappy);
+  }
 
-    &:hover {
-      color: #ef4444;
-    }
+  .icon-btn:active {
+    transform: scale(0.9);
+  }
+
+  .icon-btn.danger:hover {
+    color: var(--tp-danger);
+    background: var(--tp-danger-soft);
   }
 </style>
