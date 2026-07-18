@@ -46,6 +46,14 @@ A Parked Video MAY carry a `watching` flag (per-item, multi-allowed). `watching`
 - **Popup**: Fast-action surface (default click). Park/close tabs, quick view of recent items.
 - **Side Panel**: Persistent review/workspace surface. Stays open across tab switches. Time-based grouping, one-in-one-out playback.
 
+### Tab Operations Seam
+- All `chrome.tabs`/`chrome.windows`/`chrome.sidePanel` interactions are behind the **TabOperations** interface (`src/shared/tab-operations.ts`).
+- **Interface**: `getActiveTab()`, `getWatchTabs()`, `closeTab(id)`, `openVideo(videoId)`, `openSidePanel()`.
+- **`openVideo`** encapsulates the one-in-one-out playback strategy (reuse existing YouTube tab or create new).
+- **`openSidePanel`** throws if `chrome.sidePanel` is unavailable — no silent guard, since side panel is a core UX surface.
+- **Two adapters**: `RealTabOperations` (production, wraps `chrome.*`) and `TestTabOperations` (test double with call recording + configurable returns). Per the codebase-design principle: "one adapter = hypothetical seam, two = real."
+- **Consumers**: Popup, Side Panel, grouping (via `openVideo`), and Background all cross the same seam instead of scattering 14+ direct `chrome.*` calls.
+
 ### Capture Mechanisms
 - **Context Menu Capture**: Right-click YouTube video **link** → "Park This Video". Scoped via `contexts: ["link"]` + `targetUrlPatterns: ["*://*.youtube.com/watch*"]` so it only appears on YouTube watch links, never blank space.
 - **Shortcut Capture**: Hover video card + press `P` (primary driver, MVP). Content-script keydown guard: ignore when focus is in `input/textarea/[contenteditable]`, and only fire when `:hover` resolves to a YouTube video-card wrapper (`ytd-rich-item-renderer` etc.). Prevents false capture while typing "P" in search/comments.

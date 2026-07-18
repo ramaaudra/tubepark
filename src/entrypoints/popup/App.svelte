@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getQueue, getCapacity, parkVideo, removeVideo } from '../../shared/storage';
-  import { sweepExpiredVideos } from '../../shared/expiry';
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
-  import { filterIdleWatchTabs, isWatchTabUrl } from '../../shared/tab-helpers';
+  import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
+  import Thumbnail from '../../components/Thumbnail.svelte';
   import type { ParkedVideo, CapacityState } from '../../shared/types';
 
   let queue = $state<ParkedVideo[]>([]);
@@ -11,24 +11,20 @@
   let openWatchTabCount = $state<number>(0);
   let currentTabIsWatch = $state<boolean>(false);
   let currentTabInfo = $state<{ id?: number; title?: string; url?: string } | null>(null);
+  let nowPlaying = $state<NowPlayingTab | null>(null);
 
   async function loadData() {
-    await sweepExpiredVideos();
     queue = await getQueue();
     capacity = await getCapacity();
 
-    if (typeof chrome !== 'undefined' && chrome.tabs) {
-      const allTabs = await chrome.tabs.query({ currentWindow: true });
-      const watchTabs = allTabs.filter((t) => isWatchTabUrl(t.url));
-      openWatchTabCount = watchTabs.length;
+    const activeTab = await tabOps.getActiveTab();
+    currentTabInfo = activeTab;
+    currentTabIsWatch = activeTab !== null && extractYouTubeVideoId(activeTab.url) !== null;
 
-      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (activeTabs.length > 0) {
-        const activeTab = activeTabs[0];
-        currentTabInfo = activeTab;
-        currentTabIsWatch = isWatchTabUrl(activeTab.url);
-      }
-    }
+    const watchTabs = await tabOps.getWatchTabs();
+    openWatchTabCount = watchTabs.length;
+
+    nowPlaying = await tabOps.getNowPlayingTab();
   }
 
   onMount(() => {
@@ -44,43 +40,39 @@
     if (!videoId) return;
 
     const title = (currentTabInfo.title || 'YouTube Video').replace('- YouTube', '').trim();
-    await parkVideo({
+    const result = await parkVideo({
       id: videoId,
       title,
       channel: 'YouTube',
       addedAt: Date.now(),
     });
 
-    if (currentTabInfo.id && typeof chrome !== 'undefined' && chrome.tabs) {
-      await chrome.tabs.remove(currentTabInfo.id);
+    if (result.success || result.duplicate) {
+      if (currentTabInfo.id) await tabOps.closeTab(currentTabInfo.id);
     }
     await loadData();
   }
 
-  async function handleParkAndCloseAll() {
-    if (typeof chrome === 'undefined' || !chrome.tabs) return;
+  async function handleParkAll() {
+    const watchTabs = await tabOps.getWatchTabs();
+    const activeTab = await tabOps.getActiveTab();
 
-    const allTabs = await chrome.tabs.query({ currentWindow: true });
-    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    const activeTabId = activeTabs[0]?.id;
-
-    const idleWatchTabs = filterIdleWatchTabs(allTabs, activeTabId);
-
-    for (const tab of idleWatchTabs) {
+    for (const tab of watchTabs) {
+      if (activeTab && tab.id === activeTab.id) continue;
       if (!tab.url) continue;
       const videoId = extractYouTubeVideoId(tab.url);
       if (!videoId) continue;
 
       const title = (tab.title || 'YouTube Video').replace('- YouTube', '').trim();
-      await parkVideo({
+      const result = await parkVideo({
         id: videoId,
         title,
         channel: 'YouTube',
         addedAt: Date.now(),
       });
 
-      if (tab.id) {
-        await chrome.tabs.remove(tab.id);
+      if (result.success || result.duplicate) {
+        if (tab.id) await tabOps.closeTab(tab.id);
       }
     }
     await loadData();
@@ -92,18 +84,21 @@
   }
 
   async function handleOpenSidePanel() {
-    if (typeof chrome !== 'undefined' && chrome.sidePanel) {
-      const window = await chrome.windows.getCurrent();
-      if (window.id) {
-        await chrome.sidePanel.open({ windowId: window.id });
-        window.close();
-      }
-    }
+    await tabOps.openSidePanel();
+    window.close();
+  }
+
+  async function handlePlay(videoId: string) {
+    await tabOps.openVideo(videoId);
+    window.close();
   }
 
   const recentItems = $derived(
-    [...queue].sort((a, b) => b.addedAt - a.addedAt).slice(0, 8)
+    [...queue].sort((a, b) => b.addedAt - a.addedAt).slice(0, 3)
   );
+
+  const upNextCount = $derived(queue.filter((v) => v.pinned).length);
+  const baruCount = $derived(queue.filter((v) => !v.pinned).length);
 </script>
 
 <main class="popup-app">
@@ -154,31 +149,41 @@
 
       <button
         class="btn btn-secondary"
-        onclick={handleParkAndCloseAll}
+        onclick={handleParkAll}
         disabled={openWatchTabCount === 0}
       >
-        Park & Tutup Semua Tab Background
+        Park Semua Tab YT
       </button>
     </div>
   </section>
 
+  {#if nowPlaying}
+    <section class="now-playing-section">
+      <span class="np-label">▶ Now Playing</span>
+      <span class="np-title">{queue.find((v) => v.id === nowPlaying?.videoId)?.title ?? nowPlaying.videoId}</span>
+    </section>
+  {/if}
+
   <section class="queue-section">
     <div class="section-header">
-      <h2>Terbaru di Queue</h2>
+      <h2>📌 {upNextCount} Up Next • 📅 {baruCount} Baru</h2>
       <button class="btn-text" onclick={handleOpenSidePanel}>
-        Buka Side Panel &rarr;
+        Side Panel &rarr;
       </button>
     </div>
 
     {#if recentItems.length === 0}
       <div class="empty-state">
         <p>Belum ada video di-park</p>
-        <span class="subtext">Tekan 'P' saat hover video di YouTube</span>
+        <span class="subtext">Hover video di YouTube, klik 📌</span>
       </div>
     {:else}
       <ul class="recent-list">
         {#each recentItems as video (video.id)}
           <li class="item-card">
+            <div class="thumb-wrapper" onclick={() => handlePlay(video.id)}>
+              <Thumbnail videoId={video.id} channel={video.channel} />
+            </div>
             <div class="item-details">
               <span class="item-title">{video.title}</span>
               <span class="item-channel">{video.channel}</span>
@@ -341,6 +346,32 @@
     }
   }
 
+  .now-playing-section {
+    margin-top: 12px;
+    padding: 8px 10px;
+    background-color: #1c1114;
+    border: 1px solid #7f1d1d;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .np-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #ef4444;
+    text-transform: uppercase;
+  }
+
+  .np-title {
+    font-size: 12px;
+    color: #f4f4f5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .queue-section {
     margin-top: 16px;
     border-top: 1px solid #27272a;
@@ -354,7 +385,7 @@
     margin-bottom: 8px;
 
     h2 {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       color: #a1a1aa;
       margin: 0;
@@ -396,8 +427,6 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    max-height: 220px;
-    overflow-y: auto;
   }
 
   .item-card {
@@ -406,18 +435,25 @@
     border-radius: 6px;
     padding: 8px 10px;
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: 10px;
 
     &:hover {
       background-color: #27272a;
     }
   }
 
+  .thumb-wrapper {
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
   .item-details {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    flex: 1;
+    min-width: 0;
   }
 
   .item-title {
@@ -427,7 +463,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 250px;
   }
 
   .item-channel {
@@ -442,6 +477,7 @@
     font-size: 16px;
     cursor: pointer;
     padding: 0 4px;
+    flex-shrink: 0;
 
     &:hover {
       color: #ef4444;

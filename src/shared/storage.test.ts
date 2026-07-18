@@ -1,119 +1,159 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from "vitest";
 import {
-  deriveCapacityState,
-  parkVideoPure,
-  removeVideoPure,
-  toggleWatchingPure,
-} from './storage';
-import { ParkedVideo, DEFAULT_SETTINGS } from './types';
+	deriveCapacityState,
+	parkVideoPure,
+	removeVideoPure,
+	togglePinnedPure,
+} from "./storage";
+import type { ParkedVideo } from "./types";
 
-describe('Storage Pure Functions & Capacity Logic', () => {
-  const sampleVideo1: ParkedVideo = {
-    id: 'abc12345678',
-    title: 'Test Video 1',
-    channel: 'Test Channel',
-    addedAt: 1700000000000,
-  };
+describe("Storage Pure Functions & Capacity Logic", () => {
+	const sampleVideo1: ParkedVideo = {
+		id: "abc12345678",
+		title: "Test Video 1",
+		channel: "Test Channel",
+		addedAt: 1700000000000,
+	};
 
-  const sampleVideo2: ParkedVideo = {
-    id: 'xyz98765432',
-    title: 'Test Video 2',
-    channel: 'Test Channel 2',
-    addedAt: 1700000005000,
-  };
+	const sampleVideo2: ParkedVideo = {
+		id: "xyz98765432",
+		title: "Test Video 2",
+		channel: "Another Channel",
+		addedAt: 1700000001000,
+	};
 
-  describe('deriveCapacityState', () => {
-    it('returns safe status when below 80% capacity', () => {
-      const state = deriveCapacityState(159, 200);
-      expect(state.status).toBe('safe');
-      expect(state.count).toBe(159);
-      expect(state.max).toBe(200);
-      expect(state.percentage).toBe(79.5);
-    });
+	describe("parkVideoPure", () => {
+		it("adds video to empty queue", () => {
+			const result = parkVideoPure([], sampleVideo1);
+			expect(result.success).toBe(true);
+			expect(result.duplicate).toBe(false);
+			expect(result.full).toBe(false);
+			expect(result.queue).toEqual([sampleVideo1]);
+		});
 
-    it('returns warning status at 80% capacity (160 items)', () => {
-      const state = deriveCapacityState(160, 200);
-      expect(state.status).toBe('warning');
-      expect(state.percentage).toBe(80);
-    });
+		it("appends video to existing queue", () => {
+			const result = parkVideoPure([sampleVideo1], sampleVideo2);
+			expect(result.success).toBe(true);
+			expect(result.queue).toHaveLength(2);
+			expect(result.queue[1]).toEqual(sampleVideo2);
+		});
 
-    it('returns warning status between 80% and 99% capacity', () => {
-      const state = deriveCapacityState(199, 200);
-      expect(state.status).toBe('warning');
-    });
+		it("rejects duplicate video", () => {
+			const result = parkVideoPure([sampleVideo1], sampleVideo1);
+			expect(result.success).toBe(false);
+			expect(result.duplicate).toBe(true);
+			expect(result.full).toBe(false);
+			expect(result.queue).toEqual([sampleVideo1]);
+		});
 
-    it('returns full status at 100% capacity (200 items)', () => {
-      const state = deriveCapacityState(200, 200);
-      expect(state.status).toBe('full');
-      expect(state.percentage).toBe(100);
-    });
-  });
+		it("rejects when queue is full (200 items)", () => {
+			const fullQueue: ParkedVideo[] = Array.from({ length: 200 }, (_, i) => ({
+				id: `vid_${i}`,
+				title: `Video ${i}`,
+				channel: "Channel",
+				addedAt: 1700000000000 + i,
+			}));
+			const result = parkVideoPure(fullQueue, sampleVideo1);
+			expect(result.success).toBe(false);
+			expect(result.duplicate).toBe(false);
+			expect(result.full).toBe(true);
+			expect(result.queue).toHaveLength(200);
+		});
 
-  describe('parkVideoPure', () => {
-    it('appends a new video when queue is empty', () => {
-      const result = parkVideoPure([], sampleVideo1, DEFAULT_SETTINGS);
-      expect(result.success).toBe(true);
-      expect(result.duplicate).toBe(false);
-      expect(result.full).toBe(false);
-      expect(result.queue).toHaveLength(1);
-      expect(result.queue[0]).toEqual(sampleVideo1);
-    });
+		it("accepts when queue is at 199 (one below cap)", () => {
+			const nearFullQueue: ParkedVideo[] = Array.from(
+				{ length: 199 },
+				(_, i) => ({
+					id: `vid_${i}`,
+					title: `Video ${i}`,
+					channel: "Channel",
+					addedAt: 1700000000000 + i,
+				}),
+			);
+			const result = parkVideoPure(nearFullQueue, sampleVideo1);
+			expect(result.success).toBe(true);
+			expect(result.queue).toHaveLength(200);
+		});
+	});
 
-    it('ignores parking a video if id already exists in queue (dedupe)', () => {
-      const initialQueue = [sampleVideo1];
-      const duplicateVideo: ParkedVideo = {
-        ...sampleVideo1,
-        title: 'Updated Title Should Be Ignored',
-      };
-      const result = parkVideoPure(initialQueue, duplicateVideo, DEFAULT_SETTINGS);
-      expect(result.success).toBe(false);
-      expect(result.duplicate).toBe(true);
-      expect(result.full).toBe(false);
-      expect(result.queue).toEqual(initialQueue);
-    });
+	describe("removeVideoPure", () => {
+		it("removes video by id", () => {
+			const queue = [sampleVideo1, sampleVideo2];
+			const result = removeVideoPure(queue, sampleVideo1.id);
+			expect(result).toEqual([sampleVideo2]);
+		});
 
-    it('rejects parking when queue is at max capacity (200 items)', () => {
-      const fullQueue: ParkedVideo[] = Array.from({ length: 200 }, (_, i) => ({
-        id: `video_${i}`,
-        title: `Video ${i}`,
-        channel: 'Channel',
-        addedAt: 1700000000000 + i,
-      }));
+		it("returns same queue when id not found", () => {
+			const queue = [sampleVideo1];
+			const result = removeVideoPure(queue, "nonexistent");
+			expect(result).toEqual(queue);
+		});
 
-      const result = parkVideoPure(fullQueue, sampleVideo1, DEFAULT_SETTINGS);
-      expect(result.success).toBe(false);
-      expect(result.full).toBe(true);
-      expect(result.duplicate).toBe(false);
-      expect(result.queue).toHaveLength(200);
-    });
-  });
+		it("returns empty array for empty queue", () => {
+			const result = removeVideoPure([], "anything");
+			expect(result).toEqual([]);
+		});
+	});
 
-  describe('removeVideoPure', () => {
-    it('removes video by id from queue', () => {
-      const initialQueue = [sampleVideo1, sampleVideo2];
-      const updatedQueue = removeVideoPure(initialQueue, sampleVideo1.id);
-      expect(updatedQueue).toHaveLength(1);
-      expect(updatedQueue[0]).toEqual(sampleVideo2);
-    });
+	describe("togglePinnedPure", () => {
+		it("sets pinned to true when not pinned", () => {
+			const queue = [sampleVideo1];
+			const result = togglePinnedPure(queue, sampleVideo1.id);
+			expect(result[0].pinned).toBe(true);
+		});
 
-    it('returns unchanged queue if id does not exist', () => {
-      const initialQueue = [sampleVideo1];
-      const updatedQueue = removeVideoPure(initialQueue, 'nonexistent');
-      expect(updatedQueue).toEqual(initialQueue);
-    });
-  });
+		it("sets pinned to false when already pinned", () => {
+			const queue = [{ ...sampleVideo1, pinned: true }];
+			const result = togglePinnedPure(queue, sampleVideo1.id);
+			expect(result[0].pinned).toBe(false);
+		});
 
-  describe('toggleWatchingPure', () => {
-    it('sets watching to true if omitted or false', () => {
-      const initialQueue = [sampleVideo1];
-      const updatedQueue = toggleWatchingPure(initialQueue, sampleVideo1.id);
-      expect(updatedQueue[0].watching).toBe(true);
-    });
+		it("only affects target video, leaves others unchanged", () => {
+			const queue = [
+				{ ...sampleVideo1, pinned: true },
+				{ ...sampleVideo2, pinned: false },
+			];
+			const result = togglePinnedPure(queue, sampleVideo2.id);
+			expect(result[0].pinned).toBe(true);
+			expect(result[1].pinned).toBe(true);
+		});
 
-    it('sets watching to false if currently true', () => {
-      const initialQueue: ParkedVideo[] = [{ ...sampleVideo1, watching: true }];
-      const updatedQueue = toggleWatchingPure(initialQueue, sampleVideo1.id);
-      expect(updatedQueue[0].watching).toBe(false);
-    });
-  });
+		it("returns unchanged queue when id not found", () => {
+			const queue = [sampleVideo1];
+			const result = togglePinnedPure(queue, "nonexistent");
+			expect(result).toEqual(queue);
+		});
+	});
+
+	describe("deriveCapacityState", () => {
+		it("returns safe status for low count", () => {
+			const state = deriveCapacityState(10, 200);
+			expect(state.status).toBe("safe");
+			expect(state.count).toBe(10);
+			expect(state.max).toBe(200);
+			expect(state.percentage).toBe(5);
+		});
+
+		it("returns warning status at 80% threshold", () => {
+			const state = deriveCapacityState(160, 200);
+			expect(state.status).toBe("warning");
+		});
+
+		it("returns warning status just below full", () => {
+			const state = deriveCapacityState(199, 200);
+			expect(state.status).toBe("warning");
+		});
+
+		it("returns full status at max", () => {
+			const state = deriveCapacityState(200, 200);
+			expect(state.status).toBe("full");
+			expect(state.percentage).toBe(100);
+		});
+
+		it("returns safe status for empty queue", () => {
+			const state = deriveCapacityState(0, 200);
+			expect(state.status).toBe("safe");
+			expect(state.percentage).toBe(0);
+		});
+	});
 });

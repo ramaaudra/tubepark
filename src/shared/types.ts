@@ -1,28 +1,18 @@
 export interface ParkedVideo {
-  id: string;
-  title: string;
-  channel: string;
-  addedAt: number;
-  watching?: boolean;
+	id: string;
+	title: string;
+	channel: string;
+	addedAt: number;
+	pinned?: boolean;
 }
 
-export interface TubeParkSettings {
-  autoExpireDays: number;
-  closeTabsOnPark: boolean;
-  maxQueueSize: number;
-}
-
-export type CapacityStatus = 'safe' | 'warning' | 'full';
+export type CapacityStatus = "safe" | "warning" | "full";
 
 export interface CapacityState {
-  status: CapacityStatus;
-  count: number;
-  max: number;
-  percentage: number;
+	status: CapacityStatus;
+	count: number;
+	max: number;
+	percentage: number;
 }
 
-export const DEFAULT_SETTINGS: TubeParkSettings = {
-  autoExpireDays: 7,
-  closeTabsOnPark: true,
-  maxQueueSize: 200,
-};
+export const MAX_QUEUE_SIZE = 200;

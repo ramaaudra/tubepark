@@ -5,3 +5,5 @@ dist
 .chrome-dev-profile
 .chrome-test*
 .DS_Store
+test-results/
+debug/

@@ -1,66 +1,51 @@
-import { ParkedVideo } from './types';
-import { extractYouTubeVideoId } from './capture-predicates';
+import type { ParkedVideo } from "./types";
 
 export interface GroupedVideos {
-  watchingSection: ParkedVideo[];
-  todaySection: ParkedVideo[];
-  olderSection: ParkedVideo[];
+	upNext: ParkedVideo[];
+	baru: ParkedVideo[];
+	lebihLama: ParkedVideo[];
 }
 
 export function groupAndSortVideos(
-  queue: ParkedVideo[],
-  now: number = Date.now()
+	queue: ParkedVideo[],
+	now: number = Date.now(),
 ): GroupedVideos {
-  const ONE_DAY_MS = 86400000;
-  const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
+	const ONE_DAY_MS = 86400000;
+	const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
 
-  const watchingSection: ParkedVideo[] = [];
-  const todaySection: ParkedVideo[] = [];
-  const olderSection: ParkedVideo[] = [];
+	const upNext: ParkedVideo[] = [];
+	const baru: ParkedVideo[] = [];
+	const lebihLama: ParkedVideo[] = [];
 
-  // Sort newest first
-  const sorted = [...queue].sort((a, b) => b.addedAt - a.addedAt);
+	const sorted = [...queue].sort((a, b) => b.addedAt - a.addedAt);
 
-  for (const item of sorted) {
-    if (item.watching) {
-      watchingSection.push(item);
-    } else {
-      const age = now - item.addedAt;
-      if (age < SEVEN_DAYS_MS) {
-        todaySection.push(item);
-      } else {
-        olderSection.push(item);
-      }
-    }
-  }
+	for (const item of sorted) {
+		if (item.pinned) {
+			upNext.push(item);
+		} else {
+			const age = now - item.addedAt;
+			if (age <= SEVEN_DAYS_MS) {
+				baru.push(item);
+			} else {
+				lebihLama.push(item);
+			}
+		}
+	}
 
-  return {
-    watchingSection,
-    todaySection,
-    olderSection,
-  };
+	return { upNext, baru, lebihLama };
 }
 
-export async function openOrUpdateYouTubeTab(videoId: string): Promise<void> {
-  if (typeof chrome === 'undefined' || !chrome.tabs) return;
+export function formatAgeBadge(
+	video: ParkedVideo,
+	now: number = Date.now(),
+): string {
+	const ONE_DAY_MS = 86400000;
+	const ageMs = now - video.addedAt;
+	const ageDays = Math.floor(ageMs / ONE_DAY_MS);
 
-  const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const allTabs = await chrome.tabs.query({ currentWindow: true });
+	if (ageDays < 1) return "hari ini";
+	if (ageDays < 30) return `${ageDays} hari`;
 
-  // Look for existing YouTube watch tab
-  const existingWatchTab = allTabs.find((tab) => {
-    if (!tab.url) return false;
-    return extractYouTubeVideoId(tab.url) !== null;
-  });
-
-  if (existingWatchTab && existingWatchTab.id) {
-    // Reuse existing tab (One-in One-out playback, RAM efficient)
-    await chrome.tabs.update(existingWatchTab.id, {
-      url: targetUrl,
-      active: true,
-    });
-  } else {
-    // Spawn new tab only when no YouTube watch tab exists
-    await chrome.tabs.create({ url: targetUrl });
-  }
+	const months = Math.floor(ageDays / 30);
+	return `${months} bulan`;
 }
