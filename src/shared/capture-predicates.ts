@@ -11,6 +11,21 @@ export const YOUTUBE_VIDEO_CARD_SELECTORS = [
 	"yt-lockup-view-model",
 ];
 
+/**
+ * Ordered thumbnail selectors, newest-first. YouTube churned the thumbnail DOM
+ * the same way it churned the card DOM (see resolveVideoId): the view-model era
+ * (`yt-thumbnail-view-model`, channel grid + home shelves) supersedes the legacy
+ * `ytd-thumbnail` / `a#thumbnail` (search, watch sidebar). The park button is
+ * positioned against whichever matches so it sits on the thumbnail — not the
+ * title/metadata text below the full card.
+ */
+const THUMBNAIL_SELECTORS = [
+	"yt-thumbnail-view-model",
+	".ytThumbnailViewModelHost",
+	"ytd-thumbnail",
+	"a#thumbnail",
+];
+
 export function extractYouTubeVideoId(urlStr: string): string | null {
 	if (!urlStr) return null;
 
@@ -136,6 +151,38 @@ function channelHandleFromPath(pathname?: string): string | null {
 	if (!pathname) return null;
 	const match = pathname.match(/\/(@[^/?#]+)/);
 	return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Resolve the thumbnail sub-element of a video card, or null if none is present.
+ * The park button anchors to this (not the whole card) so it lands on the
+ * thumbnail's bottom-left corner instead of the title/metadata text beneath it.
+ * Ordered fallbacks mirror resolveVideoId — durable against YouTube DOM churn.
+ */
+export function resolveThumbnail(card: {
+	querySelector: (sel: string) => Element | null;
+}): Element | null {
+	for (const selector of THUMBNAIL_SELECTORS) {
+		const el = card.querySelector(selector);
+		if (el) return el;
+	}
+	return null;
+}
+
+/**
+ * Bottom-left inset position for the floating park button over a given rect
+ * (the thumbnail's). Pure geometry so it is unit-testable without a layout
+ * engine — the whole button height sits above `rect.bottom`, keeping it on the
+ * thumbnail rather than the text below.
+ */
+export function computeButtonPosition(
+	rect: { left: number; bottom: number },
+	size: number,
+): { left: number; top: number } {
+	return {
+		left: Math.round(rect.left + 4),
+		top: Math.round(rect.bottom - 4 - size),
+	};
 }
 
 function anchorHref(anchor: Element | null): string {

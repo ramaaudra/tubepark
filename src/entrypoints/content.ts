@@ -1,15 +1,33 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 import {
 	type CardMeta,
+	computeButtonPosition,
 	extractYouTubeVideoId,
 	resolveCardMeta,
+	resolveThumbnail,
 	YOUTUBE_VIDEO_CARD_SELECTORS,
 } from "../shared/capture-predicates";
+import { type IconName, type IconPath, icons } from "../shared/icons";
 import type { ParkedVideo } from "../shared/types";
 
 const PARK_BTN_CLASS = "tubepark-park-btn";
 const PARK_BTN_ATTR = "data-tubepark-video-id";
 const TOAST_ID = "tubepark-toast";
+const PARK_ICON_SIZE = 16;
+
+/**
+ * Render a Phosphor icon from shared `icons.ts` path data as inline SVG —
+ * byte-for-byte the duotone markup `Icon.svelte` produces (secondary path at
+ * 0.2 opacity), so the content-script button matches the popup/side-panel icons.
+ * The content script is vanilla DOM injected into YouTube and cannot mount the
+ * Svelte component, hence this string renderer over the single source of truth.
+ */
+function svgMarkup(name: IconName, size = PARK_ICON_SIZE): string {
+	const paths = (icons[name] as readonly IconPath[])
+		.map((p) => `<path d="${p.d}" opacity="${p.secondary ? 0.2 : 1}"/>`)
+		.join("");
+	return `<svg viewBox="0 0 256 256" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${paths}</svg>`;
+}
 
 function showToast(message: string, variant: "success" | "duplicate" | "full") {
 	const existing = document.getElementById(TOAST_ID);
@@ -64,7 +82,7 @@ class FloatingParkButton {
 		btn.className = PARK_BTN_CLASS;
 		btn.type = "button";
 		btn.title = "Park to TubePark";
-		btn.textContent = "📌";
+		btn.innerHTML = svgMarkup("pin");
 		btn.addEventListener("click", this.onClick);
 		document.body.appendChild(btn);
 		this.btn = btn;
@@ -133,9 +151,15 @@ class FloatingParkButton {
 	}
 
 	private positionOver(card: HTMLElement) {
-		const rect = card.getBoundingClientRect();
-		this.btn.style.left = `${Math.round(rect.left + 4)}px`;
-		this.btn.style.top = `${Math.round(rect.bottom - 4 - PARK_BTN_SIZE)}px`;
+		// Anchor to the thumbnail, not the whole card: the card's bottom sits
+		// below the title/metadata text, so a card-anchored inset landed the
+		// button over the text (the bug). resolveThumbnail falls back to the card
+		// only if no thumbnail sub-element is found.
+		const anchor = resolveThumbnail(card) ?? card;
+		const rect = anchor.getBoundingClientRect();
+		const { left, top } = computeButtonPosition(rect, PARK_BTN_SIZE);
+		this.btn.style.left = `${left}px`;
+		this.btn.style.top = `${top}px`;
 		this.btn.style.display = "flex";
 	}
 
@@ -159,30 +183,30 @@ class FloatingParkButton {
 			addedAt: Date.now(),
 		};
 
-		this.btn.textContent = "⏳";
+		this.btn.innerHTML = svgMarkup("clock");
 		chrome.runtime.sendMessage(
 			{ type: "PARK_VIDEO_REQUEST", payload },
 			(result) => {
 				if (result?.success) {
-					this.flash("✅");
+					this.flash("check");
 					showToast(`Diparkir: "${meta.title}"`, "success");
 				} else if (result?.duplicate) {
-					this.flash("ℹ️");
+					this.flash("pinFill");
 					showToast(`Sudah ada di queue: "${meta.title}"`, "duplicate");
 				} else if (result?.full) {
-					this.flash("🔴");
+					this.flash("warning");
 					showToast("Queue penuh (200/200)! Hapus video lama dulu.", "full");
 				} else {
-					this.btn.textContent = "📌";
+					this.btn.innerHTML = svgMarkup("pin");
 				}
 			},
 		);
 	};
 
-	private flash(icon: string) {
-		this.btn.textContent = icon;
+	private flash(icon: IconName) {
+		this.btn.innerHTML = svgMarkup(icon);
 		setTimeout(() => {
-			this.btn.textContent = "📌";
+			this.btn.innerHTML = svgMarkup("pin");
 		}, 2000);
 	}
 }
@@ -237,7 +261,6 @@ function injectToastStyles() {
       background: rgba(0, 0, 0, 0.7);
       backdrop-filter: blur(4px);
       color: #fff;
-      font-size: 14px;
       cursor: pointer;
       display: none;
       align-items: center;

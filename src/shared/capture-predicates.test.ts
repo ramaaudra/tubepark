@@ -3,10 +3,12 @@ import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
 import { describe, it, expect } from "vitest";
 import {
+	computeButtonPosition,
 	extractYouTubeVideoId,
 	isYouTubeWatchUrl,
 	isMatchingVideoCardSelector,
 	resolveCardMeta,
+	resolveThumbnail,
 	YOUTUBE_VIDEO_CARD_SELECTORS,
 } from "./capture-predicates";
 
@@ -150,6 +152,70 @@ describe("Capture Predicates", () => {
 			);
 			const card = document.querySelector("yt-lockup-view-model")!;
 			expect(resolveCardMeta(card, "/@mkbhd")).toBeNull();
+		});
+	});
+
+	// The park button was anchoring to the whole card, so its bottom-left inset
+	// landed BELOW the thumbnail — over the title/metadata text (see the Videos
+	// tab grid). resolveThumbnail must pick out the thumbnail sub-element across
+	// both DOM eras so positionOver measures the thumbnail, not the card.
+	describe("resolveThumbnail (real captured fixtures)", () => {
+		it("finds the legacy ytd-thumbnail on search cards", () => {
+			const card = cardFromFixture("card-search.html");
+			const thumb = resolveThumbnail(card);
+			expect(thumb).not.toBeNull();
+			expect(thumb).not.toBe(card);
+			// Legacy era: a#thumbnail nested in ytd-thumbnail.
+			expect(thumb?.matches("a#thumbnail, ytd-thumbnail")).toBe(true);
+		});
+
+		it("finds the view-model thumbnail on channel /videos grid cards", () => {
+			const card = cardFromFixture("card-channel-grid.html");
+			const thumb = resolveThumbnail(card);
+			expect(thumb).not.toBeNull();
+			expect(thumb).not.toBe(card);
+			expect(thumb?.matches("yt-thumbnail-view-model, .ytThumbnailViewModelHost")).toBe(
+				true,
+			);
+		});
+
+		it("finds the view-model thumbnail on channel-home shelf cards", () => {
+			const card = cardFromFixture("card-channel-home.html");
+			const thumb = resolveThumbnail(card);
+			expect(thumb).not.toBeNull();
+			expect(thumb).not.toBe(card);
+			expect(thumb?.matches("yt-thumbnail-view-model, .ytThumbnailViewModelHost")).toBe(
+				true,
+			);
+		});
+
+		it("returns null when the card has no thumbnail sub-element", () => {
+			const { document } = parseHTML(
+				`<body><ytd-video-renderer><span>no thumb here</span></ytd-video-renderer></body>`,
+			);
+			const card = document.querySelector("ytd-video-renderer")!;
+			expect(resolveThumbnail(card)).toBeNull();
+		});
+	});
+
+	// The bug in one assertion: fed a thumbnail rect (bottom=200) sitting inside a
+	// taller card (bottom=300), the button must land WITHIN the thumbnail's
+	// vertical band — never in the title/meta text below it. Anchoring to the card
+	// rect would put top at 300-4-28=268, well past the thumbnail's 200 bottom.
+	describe("computeButtonPosition", () => {
+		const SIZE = 28;
+		const thumbRect = { left: 40, bottom: 200 };
+
+		it("insets the button into the bottom-left of the given rect", () => {
+			const pos = computeButtonPosition(thumbRect, SIZE);
+			expect(pos.left).toBe(44); // left + 4
+			expect(pos.top).toBe(168); // bottom - 4 - SIZE
+		});
+
+		it("keeps the whole button above the rect's bottom edge (over thumbnail, not text)", () => {
+			const pos = computeButtonPosition(thumbRect, SIZE);
+			const buttonBottom = pos.top + SIZE;
+			expect(buttonBottom).toBeLessThanOrEqual(thumbRect.bottom);
 		});
 	});
 });
