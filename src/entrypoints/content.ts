@@ -1,6 +1,8 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 import {
+	type CardMeta,
 	extractYouTubeVideoId,
+	resolveCardMeta,
 	YOUTUBE_VIDEO_CARD_SELECTORS,
 } from "../shared/capture-predicates";
 import type { ParkedVideo } from "../shared/types";
@@ -29,8 +31,6 @@ function showToast(message: string, variant: "success" | "duplicate" | "full") {
 		setTimeout(() => toast.remove(), 300);
 	}, 2000);
 }
-
-type CardMeta = { videoId: string; title: string; channel: string };
 
 const CARD_SELECTOR = YOUTUBE_VIDEO_CARD_SELECTORS.join(",");
 const PARK_BTN_SIZE = 28;
@@ -95,7 +95,7 @@ class FloatingParkButton {
 			return;
 		}
 		if (card !== this.activeCard) {
-			const meta = metaForCard(card);
+			const meta = resolveCardMeta(card, location.pathname);
 			if (!meta) {
 				this.hide();
 				return;
@@ -185,28 +185,6 @@ class FloatingParkButton {
 			this.btn.textContent = "📌";
 		}, 2000);
 	}
-}
-
-function metaForCard(card: HTMLElement): CardMeta | null {
-	const linkAnchor = card.querySelector<HTMLAnchorElement>(
-		"a#thumbnail, a#video-title-link, a#video-title",
-	);
-	if (!linkAnchor) return null;
-	const href = linkAnchor.getAttribute("href") || linkAnchor.href;
-	return extractCardMetadata(card, href);
-}
-
-function extractCardMetadata(card: HTMLElement, linkUrl: string) {
-	const videoId = extractYouTubeVideoId(linkUrl);
-	if (!videoId) return null;
-
-	const titleEl = card.querySelector("#video-title, #video-title-link");
-	const channelEl = card.querySelector("#channel-name, ytd-channel-name");
-
-	const title = (titleEl?.textContent || "YouTube Video").trim();
-	const channel = (channelEl?.textContent || "YouTube Channel").trim();
-
-	return { videoId, title, channel };
 }
 
 function injectToastStyles() {
@@ -299,18 +277,15 @@ export default defineContentScript({
 						'a[href*="watch"], a[href*="youtu.be"]',
 					);
 
-					let meta: { videoId: string; title: string; channel: string } | null =
-						null;
+					let meta: CardMeta | null = null;
 
 					for (const anchor of anchors) {
 						const href = anchor.getAttribute("href") || anchor.href;
 						const videoId = extractYouTubeVideoId(href);
 						if (videoId === message.videoId) {
-							const card = anchor.closest<HTMLElement>(
-								YOUTUBE_VIDEO_CARD_SELECTORS.join(","),
-							);
+							const card = anchor.closest<HTMLElement>(CARD_SELECTOR);
 							if (card) {
-								meta = extractCardMetadata(card, href);
+								meta = resolveCardMeta(card, location.pathname);
 							}
 							break;
 						}
