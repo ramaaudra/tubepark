@@ -34,29 +34,39 @@ Instead of a wall of identical tabs, TubePark gives you a clean vertical queue w
 
 ## Getting started
 
-### Prerequisites
+### Install from a release
+
+The quickest way to try TubePark — no toolchain required.
+
+1. Download `tubepark-<version>-chrome.zip` from the [latest release](https://github.com/ramaaudra/tubepark/releases/latest).
+2. Unzip it to a folder you'll keep (the browser loads the extension from this folder).
+3. Open `chrome://extensions` and enable **Developer mode** (top-right toggle).
+4. Click **Load unpacked** and select the unzipped folder.
+5. Pin TubePark from the toolbar puzzle-piece menu, then open YouTube.
+
+> [!NOTE]
+> TubePark isn't on the Chrome Web Store yet, so it loads as an unpacked extension. Keep the unzipped folder around — deleting it removes the extension.
+
+### Build from source
+
+For development, or to build the package yourself.
+
+**Prerequisites**
 
 - [Node.js](https://nodejs.org) 20 or newer
 - A Chromium-based browser (Chrome, Edge, Brave, …)
-
-### Install
 
 ```bash
 git clone https://github.com/ramaaudra/tubepark.git
 cd tubepark
 npm install
-```
-
-### Run in development
-
-```bash
 npm run dev
 ```
 
 WXT launches a browser with the extension auto-loaded and hot-reloading enabled. Edit a file and the extension refreshes itself.
 
 > [!TIP]
-> To load a build into your everyday browser instead, run `npm run build`, then open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked** → `.output/chrome-mv3`.
+> To load a production build into your everyday browser instead, run `npm run build`, then open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked** → `.output/chrome-mv3`.
 
 ### Use it
 
