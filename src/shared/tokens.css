@@ -47,6 +47,14 @@
 	--tp-dur-spring: 350ms;
 }
 
+/* base reset — kill the browser's default body gutter so the app bg
+   fills edge-to-edge (popup + sidepanel both mount into <body>) */
+body {
+	margin: 0;
+	padding: 0;
+	background: var(--tp-bg);
+}
+
 @media (prefers-color-scheme: dark) {
 	:root {
 		/* palette — taman malam */

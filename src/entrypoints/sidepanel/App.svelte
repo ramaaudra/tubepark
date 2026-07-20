@@ -258,12 +258,6 @@
 {/snippet}
 
 <style>
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    background: var(--tp-bg);
-  }
-
   .sidepanel-app {
     display: flex;
     flex-direction: column;
