@@ -146,3 +146,7 @@ public/icon/             # extension icons
 - **[Svelte 5](https://svelte.dev)** — reactive UI for the popup and side panel.
 - **[TypeScript](https://www.typescriptlang.org)** — end to end.
 - **[Vitest](https://vitest.dev)** + **[linkedom](https://github.com/WebReflection/linkedom)** — fast unit tests against real DOM fixtures.
+
+## Privacy
+
+TubePark stores your queue entirely on your own device (`chrome.storage.local`) — no servers, no accounts, no analytics, no tracking. See the full [Privacy Policy](PRIVACY.md).
