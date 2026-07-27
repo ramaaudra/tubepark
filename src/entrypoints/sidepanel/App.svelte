@@ -3,15 +3,16 @@
   import { fly } from 'svelte/transition';
   import { flip } from 'svelte/animate';
   import {
-    getQueue,
-    getCapacity,
-    removeVideo,
-    removeManyVideos,
+    getQueueState,
     togglePinned,
+    requestRemoval,
+    cancelRemoval,
+    type QueueState,
   } from '../../shared/storage';
   import { groupAndSortVideos, formatAgeBadge } from '../../shared/grouping';
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
+  import { MSG } from '../../shared/messages';
   import Thumbnail from '../../components/Thumbnail.svelte';
   import Icon from '../../components/Icon.svelte';
   import ParkBadge from '../../components/ParkBadge.svelte';
@@ -25,14 +26,29 @@
   let nowPlaying = $state<NowPlayingTab | null>(null);
   let reduced = $state(false);
 
-  let undoItem = $state<{ video: ParkedVideo; index: number } | null>(null);
-  let undoTimer: ReturnType<typeof setTimeout> | null = null;
-  let undoBulk = $state<{ videos: ParkedVideo[]; fromIndex: number } | null>(null);
+  // G5 grace-period undo. The background owns the pending slot + the 5s timer
+  // + the commit, so closing the panel mid-window still commits (bug #4 fixed).
+  // This local state only drives the undo toast: how many items are pending,
+  // and a fallback auto-hide timer in case the background broadcast is late.
+  let pendingCount = $state(0);
+  let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function applyState(state: QueueState) {
+    queue = state.queue;
+    capacity = state.capacity;
+  }
 
   async function loadData() {
-    queue = await getQueue();
-    capacity = await getCapacity();
+    applyState(await getQueueState());
     nowPlaying = await tabOps.getNowPlayingTab();
+  }
+
+  function dismissToastSoon() {
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      pendingCount = 0;
+      toastTimer = null;
+    }, 5000);
   }
 
   onMount(() => {
@@ -40,6 +56,25 @@
     loadData();
     if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       chrome.storage.onChanged.addListener(loadData);
+    }
+    // PENDING_REMOVAL_CHANGED: the background broadcasts when the pending slot
+    // changes (request / undo / commit). Commit also writes storage (picked up
+    // by storage.onChanged above), but undo does not — so this broadcast is the
+    // panel's signal to re-show restored items on undo and to drop the toast
+    // once the grace window elapses.
+    if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener((message) => {
+        if (message?.type === MSG.PENDING_REMOVAL_CHANGED) {
+          const ids: string[] = Array.isArray(message.pendingIds) ? message.pendingIds : [];
+          pendingCount = ids.length;
+          if (ids.length === 0 && toastTimer) {
+            clearTimeout(toastTimer);
+            toastTimer = null;
+          }
+          loadData();
+        }
+        return false;
+      });
     }
     if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
       chrome.tabs.onActivated.addListener(() => loadData());
@@ -62,58 +97,40 @@
   }
 
   async function handleTogglePinned(id: string) {
-    queue = await togglePinned(id);
+    applyState(await togglePinned(id));
   }
 
   async function handleRemove(video: ParkedVideo) {
-    const index = queue.findIndex((v) => v.id === video.id);
-    undoItem = { video, index };
-    if (undoTimer) clearTimeout(undoTimer);
-    undoTimer = setTimeout(async () => {
-      queue = await removeVideo(video.id);
-      capacity = await getCapacity();
-      undoItem = null;
-    }, 5000);
-    queue = queue.filter((v) => v.id !== video.id);
-    capacity = { ...capacity, count: capacity.count - 1 };
+    // Request a grace-period removal. The background commits any previous
+    // pending slot first (rapid A-then-B commits A — bug #2), then holds this
+    // one for 5s. The display view returned already hides the pending item.
+    applyState(await requestRemoval([video]));
+    pendingCount = 1;
+    dismissToastSoon();
   }
 
-  function handleUndo() {
-    if (undoItem) {
-      queue = [...queue.slice(0, undoItem.index), undoItem.video, ...queue.slice(undoItem.index)];
-      capacity = { ...capacity, count: capacity.count + 1 };
-      undoItem = null;
-      if (undoTimer) clearTimeout(undoTimer);
-    }
-    if (undoBulk) {
-      queue = [...queue.slice(0, undoBulk.fromIndex), ...undoBulk.videos, ...queue.slice(undoBulk.fromIndex)];
-      capacity = { ...capacity, count: capacity.count + undoBulk.videos.length };
-      undoBulk = null;
+  async function handleUndo() {
+    applyState(await cancelRemoval());
+    pendingCount = 0;
+    if (toastTimer) {
+      clearTimeout(toastTimer);
+      toastTimer = null;
     }
   }
 
   async function handleRemoveAllOlder() {
-    const olderIds = grouped.lebihLama.map((v) => v.id);
-    if (olderIds.length === 0) return;
-
-    const removedVideos = grouped.lebihLama;
-    const fromIndex = queue.findIndex((v) => v.id === removedVideos[0].id);
-
-    undoBulk = { videos: removedVideos, fromIndex };
-    if (undoTimer) clearTimeout(undoTimer);
-    undoTimer = setTimeout(async () => {
-      queue = await removeManyVideos(olderIds);
-      capacity = await getCapacity();
-      undoBulk = null;
-    }, 5000);
-
-    const idSet = new Set(olderIds);
-    queue = queue.filter((v) => !idSet.has(v.id));
-    capacity = { ...capacity, count: capacity.count - olderIds.length };
+    const olderVideos = grouped.lebihLama;
+    if (olderVideos.length === 0) return;
+    // One N-item pending slot — single code path with single delete, so the
+    // bulk-undo bug (#1) cannot exist structurally (D6).
+    applyState(await requestRemoval(olderVideos));
+    pendingCount = olderVideos.length;
+    dismissToastSoon();
   }
 
   const grouped = $derived(groupAndSortVideos(queue));
-  const hasUndo = $derived(undoItem !== null || undoBulk !== null);
+  const hasUndo = $derived(pendingCount > 0);
+  const undoLabel = $derived(pendingCount > 1 ? `${pendingCount} video dihapus` : 'Video dihapus');
 </script>
 
 <main class="sidepanel-app">
@@ -229,7 +246,7 @@
 
   {#if hasUndo}
     <div class="undo-toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300 }}>
-      <span>Video dihapus</span>
+      <span>{undoLabel}</span>
       <button class="undo-btn" onclick={handleUndo}>Undo</button>
     </div>
   {/if}

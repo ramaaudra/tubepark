@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { flip } from 'svelte/animate';
-  import { getQueue, getCapacity, parkVideo, removeVideo } from '../../shared/storage';
+  import { getQueueState, parkVideo, removeVideo, type QueueState } from '../../shared/storage';
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import Thumbnail from '../../components/Thumbnail.svelte';
@@ -25,9 +25,13 @@
   let parkAllBtnEl = $state<HTMLButtonElement | null>(null);
   let listAnchorEl = $state<HTMLElement | null>(null);
 
+  function applyState(state: QueueState) {
+    queue = state.queue;
+    capacity = state.capacity;
+  }
+
   async function loadData() {
-    queue = await getQueue();
-    capacity = await getCapacity();
+    applyState(await getQueueState());
 
     const activeTab = await tabOps.getActiveTab();
     currentTabInfo = activeTab;
@@ -101,8 +105,7 @@
   }
 
   async function handleRemove(id: string) {
-    queue = await removeVideo(id);
-    capacity = await getCapacity();
+    applyState(await removeVideo(id));
   }
 
   async function handleOpenSidePanel() {

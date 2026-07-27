@@ -11,14 +11,12 @@
 TubePark is a **Frictionless Visual Scratchpad** for YouTube: it converts a horizontal tab-bar mess into a vertical, thumbnail-rich, contextual queue. RAM saving is a side-effect bonus, not the headline feature.
 
 ### Entities
-- **Parked Video**: A minimal metadata record (id, title, channel, addedAt) captured from a YouTube tab/link. It is a *Queue* item, NOT a history/log entry.
-- **TubePark Queue**: The active, temporary to-watch list stored in `chrome.storage.local` under `tubepark_queue`. Pure queue — no archive.
-- **Settings**: User preferences stored under `tubepark_settings` (autoExpireDays, closeTabsOnPark, maxQueueSize).
+- **Parked Video**: A minimal metadata record (id, title, channel, addedAt, optional pinned) captured from a YouTube tab/link. It is a *Queue* item, NOT a history/log entry.
+- **TubePark Queue**: The active, temporary to-watch list stored in `chrome.storage.local` under `tubepark_queue`. No archive.
 
-### Expiry Mechanism
-- **Trigger**: `chrome.alarms` (`tubepark-expire-sweep`, `periodInMinutes: 60`) — NOT `setInterval` (MV3 SW is ephemeral, terminates <5 min idle). Alarms survive SW termination.
-- **Double-guard**: also run sweep on Popup/Side Panel `onMount` to cover laptop sleep gaps.
-- **Semantics**: absolute age = `Date.now() - addedAt > autoExpireDays*86400000`. No "last seen" — would need extra field, contradicts lightweight.
+> Originally specified as a *pure* queue whose only organizing axis was recency. ADR-0005 (2026-07-26) amends this to permit user-controlled organization — collections/tags, alternative groupings, manual ordering, search — while keeping "no archive, no history, no `watched` flag" binding and keeping Park itself a zero-decision action. That ADR fixes the direction only; the term, cardinality, and ordering precedence are still open, and no such organization exists in the code yet.
+
+> Auto-expire (a `Settings` entity, `chrome.alarms` sweep, `autoExpireDays`) was designed in ADR-0002 but never implemented — see that ADR's Superseded note. There is currently no time-based auto-removal; `Lebih Lama` (age > 7 days) is a Side Panel display grouping only, with a manual "Hapus Semua" bulk-remove action, not automatic deletion.
 
 ### Thumbnail Strategy
 - Thumbnails are NEVER stored (no Base64) — resolved dynamically via `https://img.youtube.com/vi/{id}/mqdefault.jpg`.
@@ -26,21 +24,25 @@ TubePark is a **Frictionless Visual Scratchpad** for YouTube: it converts a hori
 - UI must `<img onerror>` → elegant placeholder (channel initial / play icon). Covers offline + deleted/private video 404s.
 
 ### Lifecycle (Parked Video)
-`Created (Parked)` → `Stored` → `Watching` → `Deleted (Done | Removed | Expired)`
+`Created (Parked)` → `Stored` → `Removed (explicit, manual)`
 
-A Parked Video is removed from storage entirely when:
-- **Done / Removed** (explicit manual triage in Side Panel), or
-- **Expired** (exceeds `autoExpireDays`).
+A Parked Video is removed from storage entirely only via explicit user action in the Popup or Side Panel (single remove, or the bulk "Hapus Semua" on `Lebih Lama`). There is no automatic deletion on watch-completion or on age — YouTube SPA makes completion detection unreliable (skip/retab/close), and auto-expire (see above) was never built. Deliberately NO `watched` flag, NO history collection (recreates YouTube native History = redundant + bloat).
 
-There is NO automatic deletion on watch-completion — YouTube SPA makes completion detection unreliable (skip/retab/close). Deletion on watch is always explicit user action. Deliberately NO `watched` flag, NO history collection (recreates YouTube native History = redundant + bloat).
+A Parked Video MAY carry a `pinned` flag (per-item, multi-allowed). Pinned items are sticky-sorted into the Side Panel's `Up Next` group with an accent border/background and a filled pin icon. Multiple concurrent pinned items are valid.
 
-A Parked Video MAY carry a `watching` flag (per-item, multi-allowed). `watching` items are sticky-sorted to the top of the Side Panel with a badge + highlight. Multiple concurrent `watching` items are valid (user may open several tabs).
+### Stored vs Visible (Pending Removal)
+A removal in the Side Panel is a **grace-period request**, not an immediate commit. For 5 seconds the doomed video is **Stored** (still in `chrome.storage.local`) but not **Visible** — it is filtered out of every display read. This fixes the four old optimistic-delete bugs (two were deterministic data loss); see ADR-0005's lineage and `docs/spec/g5-undo-model.md`.
+
+- **Pending Removal**: a single slot (`{ videos, requestedAt }`, 1 or N items) owned by the **background** service worker — never by the panel. The background holds the slot, runs the 5s `setTimeout`, and commits (writes the removal) only when the timer elapses. Closing the Side Panel mid-window still commits, because the timer is not the panel's.
+- **Undo**: a cancel message (`CANCEL_REMOVE`). It writes nothing — the video was never removed from storage — so undo can never fail and never hits the capacity cap. Requesting a second removal while one is pending **commits the first** (it is not silently cancelled).
+- **`getQueue` (Visible)** vs **`getRawQueue` (Stored)**: a split seam in `src/shared/storage.ts`. Display readers (popup, side panel, capacity meter, park cap-check) go through `getQueue`, which filters pending. Read-modify-write callers (park, togglePin, commit) use `getRawQueue` so a pending-deleted item is never silently dropped from storage. The background is the single writer; all mutations route through it to avoid cross-context write races.
+- **Undo wins over the cap**: a restored video may temporarily push the queue to 201/200. `ParkMeter` already clamps the bar (`Math.min(1, count/max)`); only the banner text must report the honest count. A *new* park is still rejected at the cap (checked against the Visible count), but restoring something that legitimately existed is never rejected.
 
 ### Queue Capacity
 - **maxQueueSize: 200** (hard cap). Large enough for a week of hunting, tight enough to force curation sessions.
 - **Safe** (<80% / <160): normal UI.
 - **Warning** (>=80%): yellow banner "Queue hampir penuh" in Popup & Side Panel.
-- **Full** (100%): new Park disabled (shortcut + context menu). Forced attempt → `chrome.notifications` "TubePark Full!".
+- **Full** (100%): a forced Park attempt (hover button or context menu) is rejected and surfaces an in-page toast ("Queue penuh (200/200)! Hapus video lama dulu.") rather than a native `chrome.notifications` alert.
 
 ### UI Surfaces
 - **Popup**: Fast-action surface (default click). Park/close tabs, quick view of recent items.
