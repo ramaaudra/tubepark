@@ -1,4 +1,10 @@
-import { type ParkedVideo, type CapacityState, MAX_QUEUE_SIZE } from "./types";
+import {
+	type ParkedVideo,
+	type CapacityState,
+	type UiState,
+	DEFAULT_UI_STATE,
+	MAX_QUEUE_SIZE,
+} from "./types";
 
 export { MAX_QUEUE_SIZE };
 import {
@@ -9,6 +15,7 @@ import { MSG } from "./messages";
 
 export const STORAGE_KEYS = {
 	QUEUE: "tubepark_queue",
+	UI_STATE: "tubepark_ui_state",
 } as const;
 
 /** A snapshot of the display view: the queue with pending removals filtered
@@ -124,16 +131,32 @@ export function removeManyPure(
 	return queue.filter((item) => !idSet.has(item.id));
 }
 
-export function togglePinnedPure(
-	queue: ParkedVideo[],
-	id: string,
-): ParkedVideo[] {
+export function togglePinnedPure(queue: ParkedVideo[], id: string): ParkedVideo[] {
+	const maxOrder = Math.max(0, ...queue.filter((item) => item.pinned).map((item) => item.order ?? 0));
 	return queue.map((item) => {
-		if (item.id === id) {
-			return { ...item, pinned: !item.pinned };
+		if (item.id !== id) return item;
+		if (item.pinned) {
+			const { pinned: _pinned, order: _order, ...unpinned } = item;
+			return unpinned;
 		}
-		return item;
+		return { ...item, pinned: true, order: maxOrder + 1 };
 	});
+}
+
+export function reorderPinnedPure(queue: ParkedVideo[], orderedIds: string[]): ParkedVideo[] {
+	const orders = new Map(orderedIds.map((id, index) => [id, index + 1]));
+	return queue.map((item) => item.pinned && orders.has(item.id)
+		? { ...item, order: orders.get(item.id) }
+		: item);
+}
+
+export function assignCollectionPure(queue: ParkedVideo[], ids: string[], collection?: string): ParkedVideo[] {
+	const selected = new Set(ids);
+	return queue.map((item) => selected.has(item.id) ? { ...item, collection: collection || undefined } : item);
+}
+
+export function renameCollectionPure(queue: ParkedVideo[], from: string, to: string): ParkedVideo[] {
+	return queue.map((item) => item.collection === from ? { ...item, collection: to || undefined } : item);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -192,6 +215,48 @@ export async function getCapacity(): Promise<CapacityState> {
 export async function saveQueue(queue: ParkedVideo[]): Promise<void> {
 	if (typeof chrome === "undefined" || !chrome.storage?.local) return;
 	await chrome.storage.local.set({ [STORAGE_KEYS.QUEUE]: queue });
+}
+
+export function normalizeUiState(value: unknown): UiState {
+	if (!value || typeof value !== "object") return { ...DEFAULT_UI_STATE };
+	const candidate = value as Partial<UiState>;
+	return {
+		activeCollection:
+			typeof candidate.activeCollection === "string" && candidate.activeCollection.trim()
+				? candidate.activeCollection
+				: null,
+		grouping: candidate.grouping === "channel" ? "channel" : "time",
+	};
+}
+
+export interface CollectionCount {
+	name: string | null;
+	count: number;
+}
+
+/** A complete partition of the queue by collection, including unassigned. */
+export function deriveCollections(queue: ParkedVideo[]): CollectionCount[] {
+	const counts = new Map<string, number>();
+	let unassigned = 0;
+	for (const video of queue) {
+		if (video.collection) counts.set(video.collection, (counts.get(video.collection) ?? 0) + 1);
+		else unassigned += 1;
+	}
+	return [
+		...(unassigned ? [{ name: null, count: unassigned }] : []),
+		...[...counts].map(([name, count]) => ({ name, count })),
+	];
+}
+
+export async function getUiState(): Promise<UiState> {
+	if (typeof chrome === "undefined" || !chrome.storage?.local) return { ...DEFAULT_UI_STATE };
+	const data = await chrome.storage.local.get(STORAGE_KEYS.UI_STATE);
+	return normalizeUiState(data[STORAGE_KEYS.UI_STATE]);
+}
+
+export async function saveUiState(state: UiState): Promise<void> {
+	if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+	await chrome.storage.local.set({ [STORAGE_KEYS.UI_STATE]: state });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -274,6 +339,17 @@ export function requestRemoval(videos: ParkedVideo[]): Promise<QueueState> {
 /** Undo the current grace-period removal. The background clears the pending
  * slot (nothing was ever written — restore never fails, D1/D5). Responds with
  * the display QueueState (restored items visible again). */
+export function mutateQueue(
+	action: "assignCollection" | "renameCollection" | "reorderPinned",
+	payload: Record<string, unknown>,
+): Promise<QueueState> {
+	return send(
+		{ type: MSG.MUTATE_QUEUE, action, ...payload },
+		{ queue: [], capacity: deriveCapacityState(0) },
+		(res) => asQueueState(res),
+	);
+}
+
 export function cancelRemoval(): Promise<QueueState> {
 	return send(
 		{ type: MSG.CANCEL_REMOVE },

@@ -1,51 +1,55 @@
 import type { ParkedVideo } from "./types";
 
-export interface GroupedVideos {
-	upNext: ParkedVideo[];
-	baru: ParkedVideo[];
-	lebihLama: ParkedVideo[];
+export type Grouping = { kind: "time" } | { kind: "channel" };
+export interface GroupedItems {
+	label: string;
+	items: ParkedVideo[];
+	kind: "up-next" | "new" | "older" | "channel" | "unknown";
+}
+
+const UNKNOWN_CHANNELS = new Set(["YouTube", "YouTube Channel"]);
+
+function pinnedOrder(a: ParkedVideo, b: ParkedVideo): number {
+	const aOrder = a.order ?? Number.MAX_SAFE_INTEGER;
+	const bOrder = b.order ?? Number.MAX_SAFE_INTEGER;
+	return aOrder - bOrder || b.addedAt - a.addedAt;
 }
 
 export function groupAndSortVideos(
 	queue: ParkedVideo[],
+	grouping: Grouping = { kind: "time" },
 	now: number = Date.now(),
-): GroupedVideos {
-	const ONE_DAY_MS = 86400000;
-	const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
+): GroupedItems[] {
+	const upNext = queue.filter((item) => item.pinned).sort(pinnedOrder);
+	const unpinned = queue.filter((item) => !item.pinned).sort((a, b) => b.addedAt - a.addedAt);
+	const groups: GroupedItems[] = [];
+	if (upNext.length) groups.push({ label: "Up Next", items: upNext, kind: "up-next" });
 
-	const upNext: ParkedVideo[] = [];
-	const baru: ParkedVideo[] = [];
-	const lebihLama: ParkedVideo[] = [];
-
-	const sorted = [...queue].sort((a, b) => b.addedAt - a.addedAt);
-
-	for (const item of sorted) {
-		if (item.pinned) {
-			upNext.push(item);
-		} else {
-			const age = now - item.addedAt;
-			if (age <= SEVEN_DAYS_MS) {
-				baru.push(item);
-			} else {
-				lebihLama.push(item);
-			}
-		}
+	if (grouping.kind === "time") {
+		const sevenDays = 7 * 86400000;
+		const baru = unpinned.filter((item) => now - item.addedAt <= sevenDays);
+		const older = unpinned.filter((item) => now - item.addedAt > sevenDays);
+		if (baru.length) groups.push({ label: "Baru", items: baru, kind: "new" });
+		if (older.length) groups.push({ label: "Lebih Lama", items: older, kind: "older" });
+		return groups;
 	}
 
-	return { upNext, baru, lebihLama };
+	const buckets = new Map<string, ParkedVideo[]>();
+	for (const item of unpinned) {
+		const channel = UNKNOWN_CHANNELS.has(item.channel) ? "tak dikenal" : item.channel;
+		const bucket = buckets.get(channel) ?? [];
+		bucket.push(item);
+		buckets.set(channel, bucket);
+	}
+	for (const [label, items] of [...buckets].sort((a, b) => b[1][0].addedAt - a[1][0].addedAt)) {
+		groups.push({ label, items, kind: label === "tak dikenal" ? "unknown" : "channel" });
+	}
+	return groups;
 }
 
-export function formatAgeBadge(
-	video: ParkedVideo,
-	now: number = Date.now(),
-): string {
-	const ONE_DAY_MS = 86400000;
-	const ageMs = now - video.addedAt;
-	const ageDays = Math.floor(ageMs / ONE_DAY_MS);
-
+export function formatAgeBadge(video: ParkedVideo, now: number = Date.now()): string {
+	const ageDays = Math.floor((now - video.addedAt) / 86400000);
 	if (ageDays < 1) return "hari ini";
 	if (ageDays < 30) return `${ageDays} hari`;
-
-	const months = Math.floor(ageDays / 30);
-	return `${months} bulan`;
+	return `${Math.floor(ageDays / 30)} bulan`;
 }

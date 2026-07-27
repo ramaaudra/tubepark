@@ -12,6 +12,7 @@ import {
 import { type IconName, type IconPath, icons } from "../shared/icons";
 import { MSG } from "../shared/messages";
 import type { ParkedVideo } from "../shared/types";
+import { parkedVideoIds, parkToastMessage, withoutPendingIds } from "../shared/parked-set";
 
 const PARK_BTN_CLASS = "tubepark-park-btn";
 const PARK_BTN_ATTR = "data-tubepark-video-id";
@@ -32,7 +33,7 @@ function svgMarkup(name: IconName, size = PARK_ICON_SIZE): string {
 	return `<svg viewBox="0 0 256 256" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${paths}</svg>`;
 }
 
-function showToast(message: string, variant: "success" | "duplicate" | "full") {
+function showToast(message: string, variant: "success" | "duplicate" | "full", onUndo?: () => void) {
 	const existing = document.getElementById(TOAST_ID);
 	if (existing) existing.remove();
 
@@ -40,6 +41,14 @@ function showToast(message: string, variant: "success" | "duplicate" | "full") {
 	toast.id = TOAST_ID;
 	toast.className = `tubepark-toast tubepark-toast-${variant}`;
 	toast.textContent = message;
+	if (onUndo) {
+		const undo = document.createElement("button");
+		undo.type = "button";
+		undo.className = "tubepark-toast-undo";
+		undo.textContent = "Undo";
+		undo.onclick = () => { onUndo(); toast.remove(); };
+		toast.append(" ", undo);
+	}
 
 	document.body.appendChild(toast);
 
@@ -50,7 +59,7 @@ function showToast(message: string, variant: "success" | "duplicate" | "full") {
 	setTimeout(() => {
 		toast.classList.remove("tubepark-toast-visible");
 		setTimeout(() => toast.remove(), 300);
-	}, 2000);
+	}, onUndo ? 5000 : 2000);
 }
 
 const CARD_SELECTOR = YOUTUBE_VIDEO_CARD_SELECTORS.join(",");
@@ -77,6 +86,7 @@ class FloatingParkButton {
 	private activeCard: HTMLElement | null = null;
 	private activeMeta: CardMeta | null = null;
 	private rafPending = false;
+	private parkedIds = new Set<string>();
 	private lastX = 0;
 	private lastY = 0;
 
@@ -89,6 +99,7 @@ class FloatingParkButton {
 		btn.addEventListener("click", this.onClick);
 		document.body.appendChild(btn);
 		this.btn = btn;
+		void this.syncParkedIds();
 
 		document.addEventListener("pointermove", this.onPointerMove, {
 			passive: true,
@@ -98,6 +109,27 @@ class FloatingParkButton {
 			passive: true,
 			capture: true,
 		});
+	}
+
+	setParkedIds(ids: Set<string>) {
+		this.parkedIds = ids;
+		this.renderState();
+	}
+
+	getParkedIds(): ReadonlySet<string> {
+		return this.parkedIds;
+	}
+
+	private syncParkedIds = async () => {
+		const state = await chrome.runtime.sendMessage({ type: MSG.GET_QUEUE });
+		this.setParkedIds(parkedVideoIds(state?.queue ?? []));
+	};
+
+	private renderState() {
+		const parked = !!this.activeMeta && this.parkedIds.has(this.activeMeta.videoId);
+		this.btn.innerHTML = svgMarkup(parked ? "pinFill" : "pin");
+		this.btn.classList.toggle("tubepark-park-btn-parked", parked);
+		this.btn.title = parked ? "Remove from TubePark" : "Park to TubePark";
 	}
 
 	private onPointerMove = (e: PointerEvent) => {
@@ -124,6 +156,7 @@ class FloatingParkButton {
 			this.activeCard = card;
 			this.activeMeta = meta;
 			this.btn.setAttribute(PARK_BTN_ATTR, meta.videoId);
+			this.renderState();
 		}
 		this.positionOver(card);
 	};
@@ -179,11 +212,24 @@ class FloatingParkButton {
 		if (!meta) return;
 		if (typeof chrome === "undefined" || !chrome.runtime) return;
 
+		if (this.parkedIds.has(meta.videoId)) {
+			this.parkedIds.delete(meta.videoId);
+			this.renderState();
+			chrome.runtime.sendMessage(
+				{ type: MSG.PENDING_REMOVE, ids: [meta.videoId] },
+				() => showToast("Dihapus", "success", () => {
+					chrome.runtime.sendMessage({ type: MSG.CANCEL_REMOVE }, () => void this.syncParkedIds());
+				}),
+			);
+			return;
+		}
+
 		const payload: ParkedVideo = {
 			id: meta.videoId,
 			title: meta.title,
 			channel: meta.channel,
 			addedAt: Date.now(),
+			durationSec: meta.durationSec,
 		};
 
 		this.btn.innerHTML = svgMarkup("clock");
@@ -191,8 +237,9 @@ class FloatingParkButton {
 			{ type: "PARK_VIDEO_REQUEST", payload },
 			(result) => {
 				if (result?.success) {
+					this.parkedIds.add(meta.videoId);
 					this.flash("check");
-					showToast(`Diparkir: "${meta.title}"`, "success");
+					showToast(parkToastMessage(meta.title, result.collection), "success");
 				} else if (result?.duplicate) {
 					this.flash("pinFill");
 					showToast(`Sudah ada di queue: "${meta.title}"`, "duplicate");
@@ -208,9 +255,7 @@ class FloatingParkButton {
 
 	private flash(icon: IconName) {
 		this.btn.innerHTML = svgMarkup(icon);
-		setTimeout(() => {
-			this.btn.innerHTML = svgMarkup("pin");
-		}, 2000);
+		setTimeout(() => this.renderState(), 2000);
 	}
 }
 
@@ -236,7 +281,7 @@ function injectToastStyles() {
       transition: opacity 200ms ease, transform 200ms ease;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       max-width: 320px;
-      pointer-events: none;
+      pointer-events: auto;
     }
     .tubepark-toast-visible {
       opacity: 1;
@@ -245,6 +290,7 @@ function injectToastStyles() {
     .tubepark-toast-success { background-color: #15803d; }
     .tubepark-toast-duplicate { background-color: #a16207; }
     .tubepark-toast-full { background-color: #dc2626; }
+    .tubepark-toast-undo { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-decoration: underline; }
 
     /*
      * Floating park button — portaled to <body>, positioned via JS.
@@ -271,6 +317,7 @@ function injectToastStyles() {
       transition: transform 150ms ease, background 150ms ease;
       line-height: 1;
     }
+    .${PARK_BTN_CLASS}.tubepark-park-btn-parked { color: #facc15; }
     .${PARK_BTN_CLASS}:hover {
       transform: scale(1.1);
       background: rgba(0, 0, 0, 0.85);
@@ -292,10 +339,26 @@ export default defineContentScript({
 
 		// A single floating button tracks the hovered card by pointer geometry —
 		// robust against YouTube's hover-preview portal. See FloatingParkButton.
-		new FloatingParkButton();
+		const floatingButton = new FloatingParkButton();
+		chrome.storage?.onChanged.addListener(() => {
+			chrome.runtime.sendMessage({ type: MSG.GET_QUEUE }, (state) => {
+				floatingButton.setParkedIds(parkedVideoIds(state?.queue ?? []));
+			});
+		});
 
 		// Handle popup tab-meta reads (G4+F4) and context-menu park requests.
 		chrome.runtime?.onMessage.addListener((message, _sender, sendResponse) => {
+			if (message?.type === MSG.PENDING_REMOVAL_CHANGED) {
+				const pendingIds = Array.isArray(message.pendingIds) ? message.pendingIds : [];
+				floatingButton.setParkedIds(withoutPendingIds(floatingButton.getParkedIds(), pendingIds));
+				if (pendingIds.length === 0) {
+					chrome.runtime.sendMessage({ type: MSG.GET_QUEUE }, (state) => {
+						floatingButton.setParkedIds(parkedVideoIds(state?.queue ?? []));
+					});
+				}
+				return false;
+			}
+
 			// One round-trip per tab for park-from-tab: channel (G4) + currentTime (F4).
 			if (message?.type === MSG.GET_TAB_META) {
 				sendResponse({
@@ -343,13 +406,14 @@ export default defineContentScript({
 						title: meta.title,
 						channel: meta.channel,
 						addedAt: Date.now(),
+						durationSec: meta.durationSec,
 					};
 
 					chrome.runtime.sendMessage(
 						{ type: MSG.PARK_VIDEO_REQUEST, payload },
 						(result) => {
 							if (result?.success) {
-								showToast(`Diparkir: "${meta!.title}"`, "success");
+								showToast(parkToastMessage(meta!.title, result.collection), "success");
 							} else if (result?.duplicate) {
 								showToast(`Sudah ada di queue: "${meta!.title}"`, "duplicate");
 							} else if (result?.full) {

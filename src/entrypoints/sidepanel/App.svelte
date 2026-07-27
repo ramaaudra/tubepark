@@ -1,657 +1,146 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
   import { flip } from 'svelte/animate';
-  import {
-    getQueueState,
-    togglePinned,
-    requestRemoval,
-    cancelRemoval,
-    type QueueState,
-  } from '../../shared/storage';
+  import { fly } from 'svelte/transition';
+  import { getQueueState, togglePinned, requestRemoval, cancelRemoval, getUiState, saveUiState, mutateQueue, deriveCollections, type QueueState } from '../../shared/storage';
   import { groupAndSortVideos, formatAgeBadge } from '../../shared/grouping';
+  import { matchesSearch, matchesDuration, formatDuration, type DurationFilter } from '../../shared/filters';
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import { MSG } from '../../shared/messages';
+  import Equalizer from '../../components/Equalizer.svelte';
+  import { parkIn, parkOut } from '../../components/transitions';
   import Thumbnail from '../../components/Thumbnail.svelte';
   import Icon from '../../components/Icon.svelte';
   import ParkBadge from '../../components/ParkBadge.svelte';
   import ParkMeter from '../../components/ParkMeter.svelte';
-  import Equalizer from '../../components/Equalizer.svelte';
-  import { parkIn, parkOut } from '../../components/transitions';
-  import type { ParkedVideo, CapacityState } from '../../shared/types';
+  import type { ParkedVideo, CapacityState, GroupingPreference } from '../../shared/types';
 
   let queue = $state<ParkedVideo[]>([]);
   let capacity = $state<CapacityState>({ status: 'safe', count: 0, max: 200, percentage: 0 });
   let nowPlaying = $state<NowPlayingTab | null>(null);
+  let query = $state('');
+  let duration = $state<DurationFilter>('all');
+  let activeCollection = $state<string | null>(null);
+  let grouping = $state<GroupingPreference>('time');
+  let selecting = $state(false);
+  let selected = $state<string[]>([]);
+  let pendingCount = $state(0);
+  let draggedId = $state<string | null>(null);
   let reduced = $state(false);
 
-  // G5 grace-period undo. The background owns the pending slot + the 5s timer
-  // + the commit, so closing the panel mid-window still commits (bug #4 fixed).
-  // This local state only drives the undo toast: how many items are pending,
-  // and a fallback auto-hide timer in case the background broadcast is late.
-  let pendingCount = $state(0);
-  let toastTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function applyState(state: QueueState) {
-    queue = state.queue;
-    capacity = state.capacity;
-  }
-
-  async function loadData() {
-    applyState(await getQueueState());
-    nowPlaying = await tabOps.getNowPlayingTab();
-  }
-
-  function dismissToastSoon() {
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-      pendingCount = 0;
-      toastTimer = null;
-    }, 5000);
-  }
+  function applyState(state: QueueState) { queue = state.queue; capacity = state.capacity; }
+  async function loadData() { applyState(await getQueueState()); nowPlaying = await tabOps.getNowPlayingTab(); }
+  async function persistUi() { await saveUiState({ activeCollection, grouping }); }
 
   onMount(() => {
+    query = '';
     reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    loadData();
-    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-      chrome.storage.onChanged.addListener(loadData);
-    }
-    // PENDING_REMOVAL_CHANGED: the background broadcasts when the pending slot
-    // changes (request / undo / commit). Commit also writes storage (picked up
-    // by storage.onChanged above), but undo does not — so this broadcast is the
-    // panel's signal to re-show restored items on undo and to drop the toast
-    // once the grace window elapses.
-    if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
-      chrome.runtime.onMessage.addListener((message) => {
-        if (message?.type === MSG.PENDING_REMOVAL_CHANGED) {
-          const ids: string[] = Array.isArray(message.pendingIds) ? message.pendingIds : [];
-          pendingCount = ids.length;
-          if (ids.length === 0 && toastTimer) {
-            clearTimeout(toastTimer);
-            toastTimer = null;
-          }
-          loadData();
-        }
-        return false;
-      });
-    }
-    if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
-      chrome.tabs.onActivated.addListener(() => loadData());
-    }
-    // YouTube is a SPA — switching video in the same tab does not fire
-    // onActivated, so the Now Playing indicator would go stale. onUpdated
-    // fires on URL change (including SPA pushState); reload only when the
-    // new URL is a YouTube video so we don't churn on title/favicon/status.
-    if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
-      chrome.tabs.onUpdated.addListener((_id, changeInfo) => {
-        if (changeInfo.url && extractYouTubeVideoId(changeInfo.url)) {
-          loadData();
-        }
-      });
-    }
+    void getUiState().then((ui) => { activeCollection = ui.activeCollection; grouping = ui.grouping; });
+    void loadData();
+    const storageListener = () => void loadData();
+    const activatedListener = () => void loadData();
+    const updatedListener = (_id: number, info: chrome.tabs.TabChangeInfo) => { if (info.url && extractYouTubeVideoId(info.url)) void loadData(); };
+    const messageListener = (message: { type?: string; pendingIds?: unknown }) => {
+      if (message.type === MSG.PENDING_REMOVAL_CHANGED) {
+        pendingCount = Array.isArray(message.pendingIds) ? message.pendingIds.length : 0;
+        void loadData();
+      }
+      return false;
+    };
+    chrome.storage?.onChanged.addListener(storageListener);
+    chrome.tabs?.onActivated.addListener(activatedListener);
+    chrome.tabs?.onUpdated.addListener(updatedListener);
+    chrome.runtime?.onMessage.addListener(messageListener);
+    return () => {
+      chrome.storage?.onChanged.removeListener(storageListener);
+      chrome.tabs?.onActivated.removeListener(activatedListener);
+      chrome.tabs?.onUpdated.removeListener(updatedListener);
+      chrome.runtime?.onMessage.removeListener(messageListener);
+    };
   });
 
-  async function handlePlay(video: ParkedVideo) {
-    // F4: pass resumeAt so openVideo builds ?v=ID&t=N when set.
-    await tabOps.openVideo(video.id, video.resumeAt);
+  async function chooseCollection(value: string) {
+    const previous = activeCollection;
+    activeCollection = value || null;
+    try { await persistUi(); } catch { activeCollection = previous; }
   }
-
-  async function handleTogglePinned(id: string) {
-    applyState(await togglePinned(id));
+  async function chooseGrouping(value: GroupingPreference) {
+    const previous = grouping;
+    grouping = value;
+    try { await persistUi(); } catch { grouping = previous; }
   }
-
-  async function handleRemove(video: ParkedVideo) {
-    // Request a grace-period removal. The background commits any previous
-    // pending slot first (rapid A-then-B commits A — bug #2), then holds this
-    // one for 5s. The display view returned already hides the pending item.
-    applyState(await requestRemoval([video]));
-    pendingCount = 1;
-    dismissToastSoon();
+  async function remove(video: ParkedVideo) { applyState(await requestRemoval([video])); pendingCount = 1; }
+  async function removeGroup(videos: ParkedVideo[]) { applyState(await requestRemoval(videos)); pendingCount = videos.length; }
+  async function undo() { applyState(await cancelRemoval()); pendingCount = 0; }
+  async function assignCollection() {
+    const name = prompt('Nama collection (kosong untuk hapus):') ?? '';
+    applyState(await mutateQueue('assignCollection', { ids: selected, collection: name.trim() }));
+    selected = []; selecting = false;
   }
-
-  async function handleUndo() {
-    applyState(await cancelRemoval());
-    pendingCount = 0;
-    if (toastTimer) {
-      clearTimeout(toastTimer);
-      toastTimer = null;
+  async function renameCollection() {
+    if (!activeCollection) return;
+    const name = prompt('Ubah nama collection:', activeCollection);
+    if (name === null) return;
+    const previous = activeCollection;
+    const next = name.trim() || null;
+    try {
+      await saveUiState({ activeCollection: next, grouping });
+      applyState(await mutateQueue('renameCollection', { from: previous, to: name.trim() }));
+      activeCollection = next;
+    } catch {
+      activeCollection = previous;
+      try { await persistUi(); } catch { /* storage remains unchanged or unavailable */ }
     }
   }
-
-  async function handleRemoveAllOlder() {
-    const olderVideos = grouped.lebihLama;
-    if (olderVideos.length === 0) return;
-    // One N-item pending slot — single code path with single delete, so the
-    // bulk-undo bug (#1) cannot exist structurally (D6).
-    applyState(await requestRemoval(olderVideos));
-    pendingCount = olderVideos.length;
-    dismissToastSoon();
+  async function dropOn(targetId: string) {
+    if (!draggedId || draggedId === targetId) return;
+    const ids = grouped.flatMap((g) => g.kind === 'up-next' ? g.items.map((v) => v.id) : []);
+    const from = ids.indexOf(draggedId); const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) { draggedId = null; return; }
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    applyState(await mutateQueue('reorderPinned', { ids })); draggedId = null;
   }
 
-  const grouped = $derived(groupAndSortVideos(queue));
-  const hasUndo = $derived(pendingCount > 0);
-  const undoLabel = $derived(pendingCount > 1 ? `${pendingCount} video dihapus` : 'Video dihapus');
+  const collections = $derived(deriveCollections(queue));
+  const scoped = $derived(queue.filter((v) => !activeCollection || v.collection === activeCollection));
+  const filtered = $derived(scoped.filter((v) => matchesSearch(v, query)).filter((v) => matchesDuration(v, duration)));
+  const grouped = $derived(groupAndSortVideos(filtered, { kind: grouping }));
 </script>
 
-<main class="sidepanel-app">
-  <header class="header">
-    <div class="brand">
-      <ParkBadge size={32} />
-      <div class="brand-text">
-        <h1 class="wordmark">TubePark</h1>
-        <span class="tagline">Visual Scratchpad</span>
-      </div>
+<main>
+  <header><div class="brand"><ParkBadge size={30}/><h1>TubePark</h1></div><ParkMeter count={capacity.count} max={capacity.max} status={capacity.status}/></header>
+  <section class="controls">
+    <input aria-label="Cari video" placeholder="Cari judul atau channel…" bind:value={query}/>
+    <div class="row">
+      <select aria-label="Collection" value={activeCollection ?? ''} onchange={(e) => chooseCollection(e.currentTarget.value)}><option value="">Semua ({queue.length})</option>{#each collections.filter((item) => item.name) as item}<option value={item.name ?? ''}>{item.name} ({item.count})</option>{/each}</select>
+      {#if activeCollection}<button onclick={renameCollection}>Ubah nama</button><button onclick={() => chooseCollection('')}>×</button>{/if}
+      <button onclick={() => selecting = !selecting}>{selecting ? 'Batal' : 'Pilih'}</button>
     </div>
-    <ParkMeter count={capacity.count} max={capacity.max} status={capacity.status} />
-  </header>
-
-  {#if capacity.status === 'warning' || capacity.status === 'full'}
-    <div class="banner" class:banner-full={capacity.status === 'full'}>
-      <Icon name="warning" size={16} />
-      <span>
-        {#if capacity.status === 'full'}
-          Queue penuh ({capacity.count}/{capacity.max})! Selesaikan atau hapus video.
-        {:else}
-          Queue hampir penuh ({capacity.count}/{capacity.max})
-        {/if}
-      </span>
-    </div>
-  {/if}
-
+    <div class="row"><select aria-label="Durasi" bind:value={duration}><option value="all">Semua durasi</option><option value="short">Pendek</option><option value="medium">Sedang</option><option value="long">Panjang</option></select><div class="seg"><button class:active={grouping === 'time'} onclick={() => chooseGrouping('time')}>Waktu</button><button class:active={grouping === 'channel'} onclick={() => chooseGrouping('channel')}>Channel</button></div></div>
+    {#if selecting}<button class="assign" disabled={selected.length === 0} onclick={assignCollection}>Masukkan ke Collection ({selected.length})</button>{/if}
+  </section>
   <div class="content">
-    {#if queue.length === 0}
-      <div class="empty">
-        <ParkBadge size={48} />
-        <h3>Scratchpad kosong</h3>
-        <p>Hover video di YouTube dan tekan <kbd>P</kbd> untuk memarkirkannya. Atau klik kanan link video → <em>Park This Video</em>.</p>
-      </div>
-    {:else}
-      {#if grouped.upNext.length > 0}
-        <section class="group">
-          <div class="group-label accent">
-            <Icon name="pinFill" size={13} />
-            <span>Up Next</span>
-            <span class="group-count">{grouped.upNext.length}</span>
-          </div>
-          <div class="cards">
-            {#each grouped.upNext as video (video.id)}
-              <div
-                class="card pinned"
-                class:playing={nowPlaying?.videoId === video.id}
-                in:parkIn={{ reduced }}
-                out:parkOut={{ reduced }}
-                animate:flip={{ duration: reduced ? 150 : 320 }}
-              >
-                {@render card(video, true)}
-              </div>
-            {/each}
-          </div>
-        </section>
-      {/if}
-
-      {#if grouped.baru.length > 0}
-        <section class="group">
-          <div class="group-label">
-            <Icon name="clock" size={13} />
-            <span>Baru</span>
-            <span class="group-count">{grouped.baru.length}</span>
-          </div>
-          <div class="cards">
-            {#each grouped.baru as video (video.id)}
-              <div
-                class="card"
-                class:playing={nowPlaying?.videoId === video.id}
-                in:parkIn={{ reduced }}
-                out:parkOut={{ reduced }}
-                animate:flip={{ duration: reduced ? 150 : 320 }}
-              >
-                {@render card(video, false)}
-              </div>
-            {/each}
-          </div>
-        </section>
-      {/if}
-
-      {#if grouped.lebihLama.length > 0}
-        <section class="group">
-          <div class="group-label between">
-            <span class="label-left">
-              <Icon name="warning" size={13} />
-              <span>Lebih Lama</span>
-              <span class="group-count">{grouped.lebihLama.length}</span>
-            </span>
-            <button class="bulk-btn" onclick={handleRemoveAllOlder}>
-              <Icon name="trash" size={13} />
-              Hapus Semua
-            </button>
-          </div>
-          <p class="stale-note">Sudah lebih dari 7 hari di queue — pangkas yang tidak relevan.</p>
-          <div class="cards">
-            {#each grouped.lebihLama as video (video.id)}
-              <div
-                class="card older"
-                class:playing={nowPlaying?.videoId === video.id}
-                in:parkIn={{ reduced }}
-                out:parkOut={{ reduced }}
-                animate:flip={{ duration: reduced ? 150 : 320 }}
-              >
-                {@render card(video, false)}
-              </div>
-            {/each}
-          </div>
-        </section>
-      {/if}
+    {#if filtered.length === 0}<div class="empty"><ParkBadge size={44}/><h3>Tidak ada video</h3><p>{query ? 'Coba pencarian lain.' : 'Park video dari YouTube untuk memulai.'}</p></div>{/if}
+    {#if capacity.status === 'warning' || capacity.status === 'full'}
+      <div class="banner" class:banner-full={capacity.status === 'full'}><Icon name="warning" size={16}/>{capacity.status === 'full' ? `Queue penuh (${capacity.count}/${capacity.max})!` : `Queue hampir penuh (${capacity.count}/${capacity.max})`}</div>
     {/if}
+    {#each grouped as group}
+      <section class:unknown={group.kind === 'unknown'}><h2>{group.label} <span>{group.items.length}</span>{#if group.kind === 'older'}<button class="bulk-btn" onclick={() => removeGroup(group.items)}>Hapus Semua</button>{/if}</h2>
+        {#each group.items as video (video.id)}
+          <article class:pinned={video.pinned} class:playing={nowPlaying?.videoId === video.id} ondragover={(e) => { if (video.pinned) e.preventDefault(); }} ondrop={() => { if (video.pinned) void dropOn(video.id); }} in:parkIn={{ reduced }} out:parkOut={{ reduced }} animate:flip={{ duration: reduced ? 150 : 320 }}>
+            {#if selecting}<input type="checkbox" checked={selected.includes(video.id)} onchange={(e) => selected = e.currentTarget.checked ? [...selected, video.id] : selected.filter((id) => id !== video.id)}/>{/if}
+            {#if video.pinned}<button class="grip" draggable="true" aria-label="Seret untuk mengurutkan {video.title}" title="Seret untuk urutkan" ondragstart={() => draggedId = video.id}><Icon name="grip" size={16}/></button>{/if}
+            <button class="thumb" onclick={() => tabOps.openVideo(video.id, video.resumeAt)}><Thumbnail videoId={video.id} channel={video.channel}/></button>
+            <div class="body"><strong>{video.title}</strong><small>{#if nowPlaying?.videoId === video.id}<Equalizer />{/if}{video.channel} · {formatAgeBadge(video)}{#if video.durationSec !== undefined} · {formatDuration(video.durationSec)}{/if}</small><div class="actions"><button onclick={() => tabOps.openVideo(video.id, video.resumeAt)}><Icon name="play" size={13}/> Putar</button><button onclick={async () => applyState(await togglePinned(video.id))}><Icon name={video.pinned ? 'pinFill' : 'pin'} size={13}/>{video.pinned ? 'Unpin' : 'Pin'}</button><button onclick={() => remove(video)}>×</button></div></div>
+          </article>
+        {/each}
+      </section>
+    {/each}
   </div>
-
-  {#if hasUndo}
-    <div class="undo-toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300 }}>
-      <span>{undoLabel}</span>
-      <button class="undo-btn" onclick={handleUndo}>Undo</button>
-    </div>
-  {/if}
+  {#if pendingCount}<div class="toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300 }}><span>{pendingCount > 1 ? `${pendingCount} video dihapus` : 'Video dihapus'}</span><button onclick={undo}>Undo</button></div>{/if}
 </main>
 
-{#snippet card(video: ParkedVideo, pinned: boolean)}
-    <button
-      class="thumb"
-      onclick={() => handlePlay(video)}
-      aria-label="Putar {video.title}"
-    >
-      <Thumbnail videoId={video.id} channel={video.channel} />
-      <span class="play-overlay"><Icon name="play" size={22} /></span>
-    </button>
-
-    <div class="card-body">
-      <h4 class="card-title" title={video.title}>{video.title}</h4>
-      <span class="card-meta">
-        {#if nowPlaying?.videoId === video.id}
-          <Equalizer />
-        {/if}
-        {video.channel}{#if !pinned} • {formatAgeBadge(video)}{/if}
-      </span>
-
-      <div class="card-actions">
-        <button class="pill play" onclick={() => handlePlay(video)}>
-          <Icon name="play" size={13} /> Putar
-        </button>
-        <button class="pill" onclick={() => handleTogglePinned(video.id)}>
-          <Icon name={pinned ? 'pinFill' : 'pin'} size={13} />
-          {pinned ? 'Unpin' : 'Pin'}
-        </button>
-        <button class="pill danger" onclick={() => handleRemove(video)}>
-          <Icon name="x" size={13} />
-        </button>
-      </div>
-    </div>
-{/snippet}
-
 <style>
-  .sidepanel-app {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    background: var(--tp-bg);
-    color: var(--tp-text);
-    font-family: var(--tp-font);
-    box-sizing: border-box;
-  }
-
-  .header {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--tp-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: var(--tp-surface);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-  }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .wordmark {
-    font-size: 16px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin: 0;
-    line-height: 1.15;
-    color: var(--tp-text);
-  }
-
-  .tagline {
-    font-size: 11px;
-    color: var(--tp-text-3);
-  }
-
-  .banner {
-    margin: 12px 16px 0;
-    background: var(--tp-warn-bg);
-    border: 1px solid var(--tp-warn-border);
-    color: var(--tp-warn-text);
-    padding: 9px 12px;
-    border-radius: var(--tp-r-btn);
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .banner.banner-full {
-    background: var(--tp-danger-soft);
-    border-color: var(--tp-danger);
-    color: var(--tp-danger);
-  }
-
-  .content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-
-  .empty {
-    text-align: center;
-    padding: 48px 24px;
-    color: var(--tp-text-3);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .empty h3 {
-    font-size: 15px;
-    color: var(--tp-text);
-    margin: 6px 0 0;
-  }
-
-  .empty p {
-    font-size: 13px;
-    line-height: 1.55;
-    margin: 0;
-    color: var(--tp-text-2);
-    max-width: 280px;
-  }
-
-  kbd {
-    font-family: inherit;
-    font-size: 11px;
-    font-weight: 700;
-    background: var(--tp-surface-2);
-    border: 1px solid var(--tp-border);
-    border-radius: 4px;
-    padding: 1px 6px;
-    color: var(--tp-text-2);
-  }
-
-  .group {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .group-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--tp-text-2);
-  }
-
-  .group-label.accent {
-    color: var(--tp-accent);
-  }
-
-  .group-label.between {
-    justify-content: space-between;
-  }
-
-  .label-left {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .group-count {
-    font-variant-numeric: tabular-nums;
-    background: var(--tp-surface-2);
-    border-radius: var(--tp-r-chip);
-    padding: 0 6px;
-    color: var(--tp-text-2);
-  }
-
-  .bulk-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-family: inherit;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    padding: 3px 8px;
-    border-radius: var(--tp-r-chip);
-    border: 1px solid var(--tp-danger);
-    background: transparent;
-    color: var(--tp-danger);
-    cursor: pointer;
-    transition:
-      background-color var(--tp-dur-micro) ease,
-      transform var(--tp-dur-press) var(--tp-ease-snappy);
-  }
-
-  .bulk-btn:hover {
-    background: var(--tp-danger-soft);
-  }
-
-  .bulk-btn:active {
-    transform: scale(0.96);
-  }
-
-  .stale-note {
-    font-size: 11.5px;
-    color: var(--tp-text-3);
-    margin: -4px 0 0;
-    line-height: 1.4;
-  }
-
-  .cards {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .card {
-    background: var(--tp-surface);
-    border: 1px solid var(--tp-border);
-    border-radius: var(--tp-r-card);
-    padding: 10px;
-    display: flex;
-    gap: 12px;
-    align-items: flex-start;
-    box-shadow: var(--tp-shadow-card);
-    transition:
-      transform var(--tp-dur-micro) var(--tp-ease-gentle),
-      box-shadow var(--tp-dur-micro) ease,
-      border-color var(--tp-dur-micro) ease;
-  }
-
-  .card:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--tp-shadow-lift);
-    border-color: var(--tp-accent);
-  }
-
-  .card.pinned {
-    border-color: var(--tp-accent);
-    background: var(--tp-accent-soft);
-  }
-
-  .card.older {
-    opacity: 0.72;
-  }
-
-  .card.older:hover {
-    opacity: 1;
-  }
-
-  .card.playing {
-    border-color: var(--tp-accent);
-    box-shadow: 0 0 0 1px var(--tp-accent), var(--tp-shadow-card);
-  }
-
-  .thumb {
-    position: relative;
-    padding: 0;
-    border: none;
-    background: none;
-    cursor: pointer;
-    flex-shrink: 0;
-    line-height: 0;
-    border-radius: 6px;
-  }
-
-  .play-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    background: rgba(0, 0, 0, 0.45);
-    border-radius: 6px;
-    opacity: 0;
-    transition: opacity var(--tp-dur-micro) ease;
-  }
-
-  .thumb:hover .play-overlay {
-    opacity: 1;
-  }
-
-  .card-body {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .card-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--tp-text);
-    margin: 0;
-    line-height: 1.3;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  .card-meta {
-    font-size: 11px;
-    color: var(--tp-text-3);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .card-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 6px;
-  }
-
-  .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-family: inherit;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 4px 9px;
-    border-radius: var(--tp-r-chip);
-    border: 1px solid var(--tp-border);
-    background: var(--tp-surface);
-    color: var(--tp-text-2);
-    cursor: pointer;
-    transition:
-      background-color var(--tp-dur-micro) ease,
-      color var(--tp-dur-micro) ease,
-      border-color var(--tp-dur-micro) ease,
-      transform var(--tp-dur-press) var(--tp-ease-snappy);
-  }
-
-  .pill:active {
-    transform: scale(0.94);
-  }
-
-  .pill:hover {
-    background: var(--tp-surface-2);
-  }
-
-  .pill.play {
-    background: var(--tp-accent);
-    color: var(--tp-accent-contrast);
-    border-color: transparent;
-  }
-
-  .pill.play:hover {
-    background: var(--tp-accent-hover);
-  }
-
-  .pill.danger {
-    color: var(--tp-text-3);
-    padding: 4px 7px;
-  }
-
-  .pill.danger:hover {
-    color: var(--tp-danger);
-    border-color: var(--tp-danger);
-    background: var(--tp-danger-soft);
-  }
-
-  .undo-toast {
-    position: fixed;
-    left: 16px;
-    right: 16px;
-    bottom: 16px;
-    background: var(--tp-text);
-    color: var(--tp-bg);
-    padding: 10px 14px;
-    border-radius: var(--tp-r-btn);
-    font-size: 12px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: var(--tp-shadow-lift);
-    z-index: 20;
-  }
-
-  .undo-btn {
-    background: none;
-    border: none;
-    color: var(--tp-accent);
-    font-weight: 700;
-    font-size: 12px;
-    cursor: pointer;
-    font-family: inherit;
-  }
-
-  .undo-btn:hover {
-    text-decoration: underline;
-  }
+  main{height:100vh;background:var(--tp-bg);color:var(--tp-text);font-family:var(--tp-font);display:flex;flex-direction:column} header{padding:12px 16px;background:var(--tp-surface);border-bottom:1px solid var(--tp-border);display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:9px}.brand h1{font-size:16px;margin:0}.controls{padding:12px 16px;border-bottom:1px solid var(--tp-border);display:grid;gap:8px}.controls input,.controls select,.controls button{font:inherit}.controls>input{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-surface);color:var(--tp-text)}.row{display:flex;gap:6px}.row select{flex:1}.row button,.assign,.actions button{border:1px solid var(--tp-border);background:var(--tp-surface);color:var(--tp-text-2);border-radius:6px;padding:5px 8px;cursor:pointer}.seg{display:flex}.seg button.active{background:var(--tp-accent);color:var(--tp-accent-contrast)}.content{overflow:auto;padding:16px;display:grid;gap:18px}h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--tp-text-2)}h2 span{background:var(--tp-surface-2);border-radius:10px;padding:1px 6px}.unknown{opacity:.7}article{display:flex;align-items:flex-start;gap:9px;padding:9px;margin-top:8px;background:var(--tp-surface);border:1px solid var(--tp-border);border-radius:10px}article.pinned,article.playing{border-color:var(--tp-accent)}.grip{cursor:grab;color:var(--tp-text-3);border:0;background:none;padding:4px}.banner{background:var(--tp-warn-bg);border:1px solid var(--tp-warn-border);color:var(--tp-warn-text);padding:9px 12px;border-radius:8px;display:flex;gap:8px}.banner-full{background:var(--tp-danger-soft);border-color:var(--tp-danger);color:var(--tp-danger)}.bulk-btn{float:right;border:1px solid var(--tp-danger);background:transparent;color:var(--tp-danger);border-radius:8px;cursor:pointer}.thumb{padding:0;border:0;background:none}.body{min-width:0;flex:1;display:grid;gap:4px}.body strong{font-size:13px}.body small{font-size:11px;color:var(--tp-text-3)}.actions{display:flex;gap:5px}.actions button{display:flex;align-items:center;gap:3px}.empty{text-align:center;color:var(--tp-text-3);padding:38px}.toast{position:fixed;bottom:16px;left:16px;right:16px;padding:10px 14px;border-radius:8px;background:var(--tp-text);color:var(--tp-bg);display:flex;justify-content:space-between}.toast button{border:0;background:none;color:var(--tp-accent);font-weight:700}
 </style>

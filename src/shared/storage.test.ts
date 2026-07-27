@@ -5,6 +5,11 @@ import {
 	removeVideoPure,
 	removeManyPure,
 	togglePinnedPure,
+	reorderPinnedPure,
+	assignCollectionPure,
+	renameCollectionPure,
+	deriveCollections,
+	normalizeUiState,
 	tryParkWithPending,
 } from "./storage";
 import { requestRemoval, type PendingRemovalState } from "./pending-removal";
@@ -98,6 +103,42 @@ describe("Storage Pure Functions & Capacity Logic", () => {
 		});
 	});
 
+	describe("collection and pinned ordering mutations", () => {
+		it("derives collection counts as a complete partition", () => {
+			const queue = [
+				sampleVideo1,
+				{ ...sampleVideo2, collection: "Belajar" },
+				{ ...sampleVideo1, id: "third", collection: "Belajar" },
+			];
+			const collections = deriveCollections(queue);
+			expect(collections).toEqual([
+				{ name: null, count: 1 },
+				{ name: "Belajar", count: 2 },
+			]);
+			expect(collections.reduce((sum, item) => sum + item.count, 0)).toBe(queue.length);
+		});
+
+		it("normalizes missing, partial, and invalid UI state", () => {
+			expect(normalizeUiState(undefined)).toEqual({ activeCollection: null, grouping: "time" });
+			expect(normalizeUiState({ activeCollection: "Belajar" })).toEqual({ activeCollection: "Belajar", grouping: "time" });
+			expect(normalizeUiState({ activeCollection: 4, grouping: "bogus" })).toEqual({ activeCollection: null, grouping: "time" });
+			expect(normalizeUiState({ grouping: "channel" })).toEqual({ activeCollection: null, grouping: "channel" });
+		});
+
+		it("assigns and renames exactly one collection label", () => {
+			const assigned = assignCollectionPure([sampleVideo1, sampleVideo2], [sampleVideo1.id], "Belajar");
+			expect(assigned[0].collection).toBe("Belajar");
+			expect(assigned[1].collection).toBeUndefined();
+			expect(renameCollectionPure(assigned, "Belajar", "Kerja")[0].collection).toBe("Kerja");
+		});
+
+		it("persists a pinned ordering", () => {
+			const queue = [{ ...sampleVideo1, pinned: true }, { ...sampleVideo2, pinned: true }];
+			const result = reorderPinnedPure(queue, [sampleVideo2.id, sampleVideo1.id]);
+			expect(result.map((item) => item.order)).toEqual([2, 1]);
+		});
+	});
+
 	describe("togglePinnedPure", () => {
 		it("sets pinned to true when not pinned", () => {
 			const queue = [sampleVideo1];
@@ -108,7 +149,8 @@ describe("Storage Pure Functions & Capacity Logic", () => {
 		it("sets pinned to false when already pinned", () => {
 			const queue = [{ ...sampleVideo1, pinned: true }];
 			const result = togglePinnedPure(queue, sampleVideo1.id);
-			expect(result[0].pinned).toBe(false);
+			expect(result[0].pinned).toBeUndefined();
+			expect(result[0].order).toBeUndefined();
 		});
 
 		it("only affects target video, leaves others unchanged", () => {

@@ -19,10 +19,16 @@ export const MSG = {
 	CANCEL_REMOVE: "CANCEL_REMOVE",
 	/** Panel → background: toggle an item's pinned flag (read-modify-write on raw). */
 	TOGGLE_PINNED: "TOGGLE_PINNED",
+	/** Panel → background: collection assignment/rename or pinned reorder. */
+	MUTATE_QUEUE: "MUTATE_QUEUE",
 	/** Popup → background: immediate single (or bulk) delete, no grace period. */
 	REMOVE_NOW: "REMOVE_NOW",
+	/** Popup → background: commit the current pending slot immediately. */
+	COMMIT_PENDING: "COMMIT_PENDING",
 	/** Popup / panel → background: read-for-display queue + capacity (filters pending). */
 	GET_VISIBLE_QUEUE: "GET_VISIBLE_QUEUE",
+	/** Content script → background: alias for its parked-id Set snapshot. */
+	GET_QUEUE: "GET_QUEUE",
 	/** Background → all extension pages + YouTube content scripts: the pending
 	 * removal set changed. `pendingIds` is the list of videoIds currently hidden
 	 * by a grace-period deletion (empty after commit or undo). */

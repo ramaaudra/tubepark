@@ -1,165 +1,51 @@
-import { describe, it, expect } from "vitest";
-import { groupAndSortVideos, formatAgeBadge } from "./grouping";
+import { describe, expect, it } from "vitest";
+import { formatAgeBadge, groupAndSortVideos } from "./grouping";
 import type { ParkedVideo } from "./types";
 
-describe("Video Grouping (3-section: Up Next / Baru / Lebih Lama)", () => {
-	const now = 1700000000000; // Reference time
-	const ONE_DAY_MS = 86400000;
+const now = 1_700_000_000_000;
+const day = 86_400_000;
+const make = (id: string, ageDays: number, extra: Partial<ParkedVideo> = {}): ParkedVideo => ({
+	id,
+	title: id,
+	channel: "Channel",
+	addedAt: now - ageDays * day,
+	...extra,
+});
 
-	const freshVideo: ParkedVideo = {
-		id: "fresh_1",
-		title: "Fresh Video",
-		channel: "Channel 1",
-		addedAt: now - ONE_DAY_MS * 0.5, // 12 hours ago
-	};
+function ids(queue: ParkedVideo[], kind: "time" | "channel" = "time") {
+	return groupAndSortVideos(queue, { kind }, now).map((group) => [group.label, group.items.map((video) => video.id)]);
+}
 
-	const weekOldVideo: ParkedVideo = {
-		id: "week_1",
-		title: "Week Old Video",
-		channel: "Channel 2",
-		addedAt: now - ONE_DAY_MS * 3, // 3 days ago
-	};
+describe("groupAndSortVideos time strategy", () => {
+	it("returns no groups for an empty queue", () => expect(ids([])).toEqual([]));
+	it("puts pinned videos in Up Next", () => expect(ids([make("p", 20, { pinned: true })])).toEqual([["Up Next", ["p"]]]));
+	it("puts videos through seven days in Baru", () => expect(ids([make("fresh", 0.5), make("boundary", 7)])).toEqual([["Baru", ["fresh", "boundary"]]]));
+	it("puts videos older than seven days in Lebih Lama", () => expect(ids([make("old", 7 + 1 / day)])).toEqual([["Lebih Lama", ["old"]]]));
+	it("omits empty groups", () => expect(ids([make("fresh", 1)])).toHaveLength(1));
+	it("sorts unpinned groups newest first", () => expect(ids([make("old", 3), make("new", 1)])[0][1]).toEqual(["new", "old"]));
+	it("sorts Up Next by gap-tolerant order", () => expect(ids([
+		make("last", 1, { pinned: true, order: 20 }),
+		make("first", 9, { pinned: true, order: 2 }),
+		make("unordered", 0, { pinned: true }),
+	])[0][1]).toEqual(["first", "last", "unordered"]));
+	it("keeps pinned videos out of age groups", () => expect(ids([make("p", 20, { pinned: true }), make("old", 20)])).toEqual([["Up Next", ["p"]], ["Lebih Lama", ["old"]]]));
+});
 
-	const oldVideo: ParkedVideo = {
-		id: "old_1",
-		title: "Old Video",
-		channel: "Channel 3",
-		addedAt: now - ONE_DAY_MS * 14, // 14 days ago
-	};
-
-	const pinnedVideo: ParkedVideo = {
-		id: "pinned_1",
-		title: "Pinned Video",
-		channel: "Channel 4",
-		addedAt: now - ONE_DAY_MS * 20, // old but pinned
-		pinned: true,
-	};
-
-	describe("groupAndSortVideos", () => {
-		it("separates pinned videos into upNext section", () => {
-			const result = groupAndSortVideos([freshVideo, pinnedVideo], now);
-			expect(result.upNext).toEqual([pinnedVideo]);
-			expect(result.baru).toEqual([freshVideo]);
-			expect(result.lebihLama).toEqual([]);
-		});
-
-		it("puts videos <7 days into baru section", () => {
-			const result = groupAndSortVideos([freshVideo, weekOldVideo], now);
-			expect(result.baru).toHaveLength(2);
-			expect(result.lebihLama).toEqual([]);
-		});
-
-		it("puts videos >7 days into lebihLama section", () => {
-			const result = groupAndSortVideos([oldVideo], now);
-			expect(result.lebihLama).toEqual([oldVideo]);
-			expect(result.baru).toEqual([]);
-		});
-
-		it("pinned video goes to upNext regardless of age", () => {
-			const result = groupAndSortVideos([pinnedVideo], now);
-			expect(result.upNext).toEqual([pinnedVideo]);
-			expect(result.lebihLama).toEqual([]);
-		});
-
-		it("sorts baru section newest first", () => {
-			const result = groupAndSortVideos([weekOldVideo, freshVideo], now);
-			expect(result.baru[0].id).toBe("fresh_1");
-			expect(result.baru[1].id).toBe("week_1");
-		});
-
-		it("sorts lebihLama section newest first", () => {
-			const veryOld: ParkedVideo = {
-				id: "very_old",
-				title: "Very Old",
-				channel: "Ch",
-				addedAt: now - ONE_DAY_MS * 30,
-			};
-			const result = groupAndSortVideos([veryOld, oldVideo], now);
-			expect(result.lebihLama[0].id).toBe("old_1");
-			expect(result.lebihLama[1].id).toBe("very_old");
-		});
-
-		it("returns all empty arrays for empty queue", () => {
-			const result = groupAndSortVideos([], now);
-			expect(result.upNext).toEqual([]);
-			expect(result.baru).toEqual([]);
-			expect(result.lebihLama).toEqual([]);
-		});
-
-		it("boundary: exactly 7 days goes to baru, not lebihLama", () => {
-			const exactlySevenDays: ParkedVideo = {
-				id: "boundary",
-				title: "Boundary",
-				channel: "Ch",
-				addedAt: now - ONE_DAY_MS * 7,
-			};
-			const result = groupAndSortVideos([exactlySevenDays], now);
-			expect(result.baru).toEqual([exactlySevenDays]);
-			expect(result.lebihLama).toEqual([]);
-		});
-
-		it("boundary: 7 days + 1ms goes to lebihLama", () => {
-			const justOverSeven: ParkedVideo = {
-				id: "just_over",
-				title: "Just Over",
-				channel: "Ch",
-				addedAt: now - ONE_DAY_MS * 7 - 1,
-			};
-			const result = groupAndSortVideos([justOverSeven], now);
-			expect(result.lebihLama).toEqual([justOverSeven]);
-			expect(result.baru).toEqual([]);
-		});
+describe("groupAndSortVideos channel strategy", () => {
+	it("keeps Up Next cross-channel", () => expect(ids([make("a", 1, { channel: "A", pinned: true }), make("b", 2, { channel: "B", pinned: true })], "channel")[0][0]).toBe("Up Next"));
+	it("sorts channel buckets by newest item", () => expect(ids([make("a", 2, { channel: "A" }), make("b", 1, { channel: "B" })], "channel").map(([label]) => label)).toEqual(["B", "A"]));
+	it("sorts inside buckets newest first", () => expect(ids([make("old", 4, { channel: "A" }), make("new", 2, { channel: "A" })], "channel")[0][1]).toEqual(["new", "old"]));
+	it("combines legacy fallback channels in tak dikenal", () => {
+		const groups = groupAndSortVideos([make("a", 1, { channel: "YouTube" }), make("b", 2, { channel: "YouTube Channel" })], { kind: "channel" }, now);
+		expect(groups[0].kind).toBe("unknown");
+		expect(groups[0].items).toHaveLength(2);
 	});
+	it("omits unknown when no fallback items exist", () => expect(groupAndSortVideos([make("a", 1, { channel: "A" })], { kind: "channel" }, now).some((group) => group.kind === "unknown")).toBe(false));
+});
 
-	describe("formatAgeBadge", () => {
-		it('returns "hari ini" for same day', () => {
-			const video: ParkedVideo = {
-				id: "v1",
-				title: "T",
-				channel: "C",
-				addedAt: now - 1000,
-			};
-			expect(formatAgeBadge(video, now)).toBe("hari ini");
-		});
-
-		it('returns "1 hari" for 1 day old', () => {
-			const video: ParkedVideo = {
-				id: "v1",
-				title: "T",
-				channel: "C",
-				addedAt: now - ONE_DAY_MS,
-			};
-			expect(formatAgeBadge(video, now)).toBe("1 hari");
-		});
-
-		it('returns "N hari" for N days old', () => {
-			const video: ParkedVideo = {
-				id: "v1",
-				title: "T",
-				channel: "C",
-				addedAt: now - ONE_DAY_MS * 14,
-			};
-			expect(formatAgeBadge(video, now)).toBe("14 hari");
-		});
-
-		it('returns "1 bulan" for 30+ days', () => {
-			const video: ParkedVideo = {
-				id: "v1",
-				title: "T",
-				channel: "C",
-				addedAt: now - ONE_DAY_MS * 35,
-			};
-			expect(formatAgeBadge(video, now)).toBe("1 bulan");
-		});
-
-		it('returns "2 bulan" for 60+ days', () => {
-			const video: ParkedVideo = {
-				id: "v1",
-				title: "T",
-				channel: "C",
-				addedAt: now - ONE_DAY_MS * 65,
-			};
-			expect(formatAgeBadge(video, now)).toBe("2 bulan");
-		});
-	});
+describe("formatAgeBadge", () => {
+	it.each([[0, "hari ini"], [1, "1 hari"], [14, "14 hari"], [35, "1 bulan"], [65, "2 bulan"]])(
+		"formats %s days",
+		(days, expected) => expect(formatAgeBadge(make("v", days), now)).toBe(expected),
+	);
 });

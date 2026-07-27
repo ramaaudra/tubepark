@@ -1,3 +1,5 @@
+import { parseDurationSec } from "./filters";
+
 export const YOUTUBE_VIDEO_CARD_SELECTORS = [
 	"ytd-rich-item-renderer",
 	"ytd-video-renderer",
@@ -75,7 +77,7 @@ export function isMatchingVideoCardSelector(
 	);
 }
 
-export type CardMeta = { videoId: string; title: string; channel: string };
+export type CardMeta = { videoId: string; title: string; channel: string; durationSec?: number };
 
 /**
  * Extract a Parked-Video's metadata from a resolved video card, or null if the
@@ -105,6 +107,7 @@ export function resolveCardMeta(
 		videoId,
 		title: resolveTitle(card),
 		channel: resolveChannel(card, pathname),
+		durationSec: resolveDuration(card),
 	};
 }
 
@@ -148,6 +151,17 @@ function resolveTitle(card: {
 		if (t) return t;
 	}
 	return "YouTube Video";
+}
+
+function resolveDuration(card: { querySelectorAll: (sel: string) => ArrayLike<Element> }): number | undefined {
+	const badges = card.querySelectorAll(
+		"ytd-thumbnail-overlay-time-status-renderer, .yt-badge-shape__text, #text",
+	);
+	for (const badge of Array.from(badges)) {
+		const duration = parseDurationSec(badge.textContent || "");
+		if (duration !== undefined) return duration;
+	}
+	return undefined;
 }
 
 function resolveChannel(

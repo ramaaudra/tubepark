@@ -4,12 +4,16 @@ import {
 	saveQueue,
 	tryParkWithPending,
 	togglePinnedPure,
+	reorderPinnedPure,
+	assignCollectionPure,
+	renameCollectionPure,
 	removeManyPure,
 	deriveCapacityState,
 	MAX_QUEUE_SIZE,
 	type QueueState,
 } from "../shared/storage";
 import type { ParkedVideo } from "../shared/types";
+import { getUiState } from "../shared/storage";
 import {
 	type PendingRemovalState,
 	requestRemoval,
@@ -19,6 +23,7 @@ import {
 } from "../shared/pending-removal";
 import { MSG } from "../shared/messages";
 import { extractYouTubeVideoId } from "../shared/capture-predicates";
+import { MutationQueue } from "../shared/mutation-queue";
 
 const CONTEXT_MENU_ID = "tubepark-park-context-menu";
 
@@ -36,6 +41,7 @@ const GRACE_MS = 5000;
  * not persisted, so an SW restart clears it (items stay in storage — safe). */
 let pending: PendingRemovalState = null;
 let commitTimer: ReturnType<typeof setTimeout> | null = null;
+const mutations = new MutationQueue();
 
 function clearTimer() {
 	if (commitTimer) {
@@ -45,10 +51,20 @@ function clearTimer() {
 }
 
 /** Remove the given ids from storage (the commit write). */
+async function updateBadge(): Promise<void> {
+	if (!chrome.action?.setBadgeText) return;
+	const state = await visibleState();
+	const color = state.capacity.status === "full" ? "#dc2626" : state.capacity.status === "warning" ? "#a16207" : "#15803d";
+	await chrome.action.setBadgeText({ text: state.queue.length ? String(state.queue.length) : "" });
+	await chrome.action.setBadgeBackgroundColor({ color });
+}
+
 async function applyRemoval(ids: string[]): Promise<void> {
 	if (ids.length === 0) return;
-	const raw = await getRawQueue();
-	await saveQueue(removeManyPure(raw, ids));
+	await mutations.run(async () => {
+		const raw = await getRawQueue();
+		await saveQueue(removeManyPure(raw, ids));
+	});
 }
 
 /** Snapshot the display view: raw queue with pending filtered out + capacity
@@ -180,24 +196,44 @@ export default defineBackground(() => {
 		chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 			if (message?.type === MSG.PARK_VIDEO_REQUEST) {
 				(async () => {
-					const raw = await getRawQueue();
-					const result = tryParkWithPending(raw, pending, message.payload);
-					if (result.success) {
-						// Write base is raw — pending-deleted items are preserved.
-						await saveQueue([...raw, message.payload]);
-					}
-					sendResponse(result);
+					const response = await mutations.run(async () => {
+						const raw = await getRawQueue();
+						const ui = await getUiState();
+						const payload: ParkedVideo = ui.activeCollection
+							? { ...message.payload, collection: ui.activeCollection }
+							: message.payload;
+						const result = tryParkWithPending(raw, pending, payload);
+						if (result.success) await saveQueue([...raw, payload]);
+						return { ...result, collection: ui.activeCollection };
+					});
+					await updateBadge();
+					sendResponse(response);
 				})();
 				return true;
 			}
 
 			if (message?.type === MSG.PENDING_REMOVE) {
 				(async () => {
-					const videos: ParkedVideo[] = Array.isArray(message.videos)
-						? message.videos
+					const requestedIds: string[] = Array.isArray(message.ids)
+						? message.ids.filter((id: unknown): id is string => typeof id === "string")
 						: [];
+					const videos: ParkedVideo[] = requestedIds.length > 0
+						? (await getRawQueue()).filter((video) => requestedIds.includes(video.id))
+						: Array.isArray(message.videos) ? message.videos : [];
 					const state = await startPending(videos);
 					sendResponse(state);
+				})();
+				return true;
+			}
+
+			if (message?.type === MSG.COMMIT_PENDING) {
+				(async () => {
+					const ids = commitRemoval(pending);
+					clearTimer();
+					pending = null;
+					if (ids.length > 0) await applyRemoval(ids);
+					broadcastPendingChanged();
+					sendResponse(await visibleState());
 				})();
 				return true;
 			}
@@ -213,8 +249,25 @@ export default defineBackground(() => {
 			if (message?.type === MSG.TOGGLE_PINNED) {
 				(async () => {
 					// Read-modify-write on RAW so a pending deletion is not dropped.
-					const raw = await getRawQueue();
-					await saveQueue(togglePinnedPure(raw, message.id));
+					await mutations.run(async () => {
+						const raw = await getRawQueue();
+						await saveQueue(togglePinnedPure(raw, message.id));
+					});
+					sendResponse(await visibleState());
+				})();
+				return true;
+			}
+
+			if (message?.type === MSG.MUTATE_QUEUE) {
+				(async () => {
+					await mutations.run(async () => {
+						const raw = await getRawQueue();
+						let next = raw;
+						if (message.action === "assignCollection") next = assignCollectionPure(raw, message.ids ?? [], message.collection);
+						if (message.action === "renameCollection") next = renameCollectionPure(raw, message.from, message.to);
+						if (message.action === "reorderPinned") next = reorderPinnedPure(raw, message.ids ?? []);
+						await saveQueue(next);
+					});
 					sendResponse(await visibleState());
 				})();
 				return true;
@@ -236,7 +289,10 @@ export default defineBackground(() => {
 				return true;
 			}
 
-			if (message?.type === MSG.GET_VISIBLE_QUEUE) {
+			if (
+				message?.type === MSG.GET_VISIBLE_QUEUE ||
+				message?.type === MSG.GET_QUEUE
+			) {
 				(async () => {
 					sendResponse(await visibleState());
 				})();
@@ -245,5 +301,8 @@ export default defineBackground(() => {
 
 			return false;
 		});
+
+		chrome.storage?.onChanged.addListener(() => void updateBadge());
+		void updateBadge();
 	}
 });

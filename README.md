@@ -5,7 +5,7 @@
 
   **A frictionless visual scratchpad for YouTube.**
 
-  Turn a horizontal tab-bar mess into a vertical, thumbnail-rich queue — one hover, one keypress, parked.
+  Turn a horizontal tab-bar mess into a vertical, thumbnail-rich queue — one hover, one click, parked.
 
   <sub>Manifest V3 browser extension · Built with [WXT](https://wxt.dev) + [Svelte 5](https://svelte.dev)</sub>
 </div>
@@ -17,7 +17,7 @@ When you're deep in a YouTube hunt, the tab bar fills up fast. Past ~20 tabs the
 Instead of a wall of identical tabs, TubePark gives you a clean vertical queue where every parked video keeps its thumbnail, title, and channel. Park what you want to watch later, close the tab, and come back to a contextual to-watch list whenever you're ready.
 
 > [!NOTE]
-> TubePark is a **queue**, not a history log. Videos live in the queue until you watch them, remove them, or they age out. There's deliberately no "watched" archive — YouTube's native History already does that.
+> TubePark is a **queue**, not a history log. Videos live in the queue until you explicitly remove them (individually, or in bulk once they've aged past 7 days in the Side Panel's *Lebih Lama* group). There's deliberately no "watched" archive — YouTube's native History already does that.
 
 ## Features
 
@@ -102,7 +102,7 @@ The queue lives in `chrome.storage.local` under `tubepark_queue`. A parked video
 Key architectural choices are recorded as ADRs in [`docs/adr/`](docs/adr):
 
 - [0001](docs/adr/0001-context-menu-scoping.md) — scoping the context menu to YouTube watch links only.
-- [0002](docs/adr/0002-expiry-alarms.md) — using `chrome.alarms` (not `setInterval`) for expiry, since MV3 service workers are ephemeral.
+- [0002](docs/adr/0002-expiry-alarms.md) — planned auto-expire design via `chrome.alarms`; superseded, never implemented (queue trimming is manual only in the shipped MVP).
 - [0003](docs/adr/0003-thumbnails-dynamic.md) — resolving thumbnails dynamically instead of storing them.
 - [0004](docs/adr/0004-migrate-to-wxt.md) — adopting WXT as the build system.
 

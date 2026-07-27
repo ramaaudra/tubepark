@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { flip } from 'svelte/animate';
-  import { getQueueState, parkVideo, removeVideo, type QueueState } from '../../shared/storage';
+  import { getQueueState, parkVideo, requestRemoval, cancelRemoval, type QueueState } from '../../shared/storage';
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
   import { MSG, type TabMeta } from '../../shared/messages';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
@@ -65,6 +65,8 @@
   let currentTabIsWatch = $state<boolean>(false);
   let currentTabInfo = $state<{ id?: number; title?: string; url?: string } | null>(null);
   let nowPlaying = $state<NowPlayingTab | null>(null);
+  let pendingCount = $state(0);
+  let pendingVideos = $state<ParkedVideo[]>([]);
 
   let reduced = $state(false);
   let parkBtnEl = $state<HTMLButtonElement | null>(null);
@@ -91,10 +93,19 @@
 
   onMount(() => {
     reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    loadData();
-    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-      chrome.storage.onChanged.addListener(loadData);
-    }
+    void loadData();
+    const storageListener = () => void loadData();
+    const commitPending = () => {
+      if (pendingCount > 0) chrome.runtime?.sendMessage({ type: MSG.COMMIT_PENDING });
+    };
+    chrome.storage?.onChanged.addListener(storageListener);
+    window.addEventListener('blur', commitPending);
+    window.addEventListener('pagehide', commitPending);
+    return () => {
+      chrome.storage?.onChanged.removeListener(storageListener);
+      window.removeEventListener('blur', commitPending);
+      window.removeEventListener('pagehide', commitPending);
+    };
   });
 
   function launchChip(from: Element | null, label?: string) {
@@ -145,8 +156,26 @@
     await loadData();
   }
 
-  async function handleRemove(id: string) {
-    applyState(await removeVideo(id));
+  async function handleRemove(video: ParkedVideo) {
+    const previous = queue;
+    queue = queue.filter((item) => item.id !== video.id);
+    capacity = { ...capacity, count: queue.length, percentage: (queue.length / capacity.max) * 100 };
+    pendingVideos = [video];
+    pendingCount = 1;
+    try {
+      applyState(await requestRemoval([video]));
+    } catch {
+      queue = previous;
+      pendingVideos = [];
+      pendingCount = 0;
+    }
+  }
+
+  async function handleUndo() {
+    queue = [...queue, ...pendingVideos];
+    pendingVideos = [];
+    pendingCount = 0;
+    applyState(await cancelRemoval());
   }
 
   async function handleOpenSidePanel() {
@@ -263,7 +292,7 @@
               <span class="card-title">{video.title}</span>
               <span class="card-meta">{video.channel}</span>
             </div>
-            <button class="icon-btn danger" title="Hapus" onclick={() => handleRemove(video.id)}>
+            <button class="icon-btn danger" title="Hapus" onclick={() => handleRemove(video)}>
               <Icon name="x" size={16} />
             </button>
           </li>
@@ -271,6 +300,10 @@
       </ul>
     {/if}
   </section>
+
+  {#if pendingCount > 0}
+    <div class="undo-toast"><span>Video dihapus</span><button onclick={handleUndo}>Undo</button></div>
+  {/if}
 </main>
 
 <style>
@@ -591,6 +624,14 @@
   .icon-btn:active {
     transform: scale(0.9);
   }
+
+  .undo-toast {
+    position: fixed; left: 14px; right: 14px; bottom: 14px; z-index: 20;
+    display: flex; justify-content: space-between; padding: 10px 14px;
+    border-radius: var(--tp-r-btn); background: var(--tp-text); color: var(--tp-bg);
+    font-size: 12px; box-shadow: var(--tp-shadow-lift);
+  }
+  .undo-toast button { border: 0; background: none; color: var(--tp-accent); font-weight: 700; cursor: pointer; }
 
   .icon-btn.danger:hover {
     color: var(--tp-danger);

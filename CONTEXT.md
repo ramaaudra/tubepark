@@ -13,8 +13,9 @@ TubePark is a **Frictionless Visual Scratchpad** for YouTube: it converts a hori
 ### Entities
 - **Parked Video**: A minimal metadata record (id, title, channel, addedAt, optional pinned, optional resumeAt) captured from a YouTube tab/link. It is a *Queue* item, NOT a history/log entry. `resumeAt` (seconds) is set only when parking a mid-watch tab; hover/context-menu park leave it undefined.
 - **TubePark Queue**: The active, temporary to-watch list stored in `chrome.storage.local` under `tubepark_queue`. No archive.
+- **Collection**: An optional, exactly-one-per-video user label that acts as a lens over the Queue. It is not a container: items remain Queue members, pinning stays orthogonal, and “Semua” always sees the whole Queue. Collections are derived from item labels rather than stored as separate entities.
 
-> Originally specified as a *pure* queue whose only organizing axis was recency. ADR-0005 (2026-07-26) amends this to permit user-controlled organization — collections/tags, alternative groupings, manual ordering, search — while keeping "no archive, no history, no `watched` flag" binding and keeping Park itself a zero-decision action. That ADR fixes the direction only; the term, cardinality, and ordering precedence are still open, and no such organization exists in the code yet.
+> Originally specified as a *pure* queue whose only organizing axis was recency. ADR-0005 (2026-07-26) amends this to permit user-controlled organization — collections/tags, alternative groupings, manual ordering, search — while keeping "no archive, no history, no `watched` flag" binding and keeping Park itself a zero-decision action. That ADR fixed the direction; Collection now means an optional exactly-one label, while grouping and pinned ordering remain orthogonal views over the Queue.
 
 > Auto-expire (a `Settings` entity, `chrome.alarms` sweep, `autoExpireDays`) was designed in ADR-0002 but never implemented — see that ADR's Superseded note. There is currently no time-based auto-removal; `Lebih Lama` (age > 7 days) is a Side Panel display grouping only, with a manual "Hapus Semua" bulk-remove action, not automatic deletion.
 
