@@ -14,7 +14,21 @@ export default defineBackground(() => {
 					id: CONTEXT_MENU_ID,
 					title: "Park This Video",
 					contexts: ["link"],
-					targetUrlPatterns: ["*://*.youtube.com/watch*"],
+					// G3: targetUrlPatterns filters the right-clicked LINK's URL.
+					// /watch* is the primary path; youtu.be/* and /shorts* are
+					// first-class video URLs (G2 — Shorts are first-class), so
+					// short-URL and Shorts-URL captures are scoped here too.
+					targetUrlPatterns: [
+						"*://*.youtube.com/watch*",
+						"*://youtu.be/*",
+						"*://*.youtube.com/shorts*",
+					],
+					// G3: documentUrlPatterns filters the PAGE the right-click
+					// happens on. Without it the menu appeared for YouTube links
+					// on Reddit/Discord/etc., where no content script is loaded
+					// → silent fail. Scope to YouTube pages so the menu only
+					// appears where it can actually park (ADR-0001 amended).
+					documentUrlPatterns: ["*://*.youtube.com/*"],
 				});
 			}
 		});

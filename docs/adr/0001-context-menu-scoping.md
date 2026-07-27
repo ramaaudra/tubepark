@@ -3,6 +3,27 @@
 ## Status
 Accepted (2026-07-17)
 
+## Correction (2026-07-27, G3)
+
+Two corrections to the original Decision below:
+
+1. **`documentUrlPatterns` added.** The original Decision scoped only the
+   right-clicked *link* via `targetUrlPatterns`, not the *page* the click
+   happens on. That let the menu appear for YouTube links on Reddit/Discord/etc.,
+   where no content script is loaded → clicking it silently did nothing. G3
+   adds `documentUrlPatterns: ["*://*.youtube.com/*"]` so the menu appears only
+   on YouTube pages, where it can actually park. This tightens — does not
+   reverse — the original scoping rationale.
+2. **`targetUrlPatterns` widened to `youtu.be/*` and `/shorts*`.** Shorts are
+   first-class videos (G2) and `youtu.be` short links were already recognised by
+   `extractYouTubeVideoId` but not offered the menu. Both are now scoped.
+
+Also: the line "Shortcut Capture (hover + `P`) is the primary driver" below is
+historically accurate as written (2026-07-17) but is now obsolete — the `P`
+shortcut was removed (the `FloatingParkButton` hover-click replaced it) and the
+context menu is no longer a "secondary path" but one of two validated capture
+paths alongside the hover button. Left as historical record.
+
 ## Context
 MV3 `chrome.contextMenus` are static and global — they cannot be scoped to a specific DOM element (e.g. only `ytd-thumbnail`). A naive menu would appear on every right-click, including blank YouTube space, producing a confusing UX and false captures.
 

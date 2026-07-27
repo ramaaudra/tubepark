@@ -59,6 +59,27 @@ describe("Capture Predicates", () => {
 			);
 		});
 
+		// Shorts are first-class videos (G2): /shorts/{id} is a watchable video
+		// with the same id semantics as /watch?v=. Park, queue, play all work
+		// against /watch?v={id}; the Shorts id is an ordinary video id.
+		it("extracts video id from /shorts/ URL", () => {
+			expect(
+				extractYouTubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+			).toBe("dQw4w9WgXcQ");
+		});
+
+		it("extracts video id from /shorts/ URL with query params", () => {
+			expect(
+				extractYouTubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ?t=10"),
+			).toBe("dQw4w9WgXcQ");
+		});
+
+		it("extracts video id from /shorts/ URL with trailing slash", () => {
+			expect(
+				extractYouTubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ/"),
+			).toBe("dQw4w9WgXcQ");
+		});
+
 		it("returns null for non-watch URLs", () => {
 			expect(
 				extractYouTubeVideoId("https://youtube.com/feed/subscriptions"),
@@ -152,6 +173,45 @@ describe("Capture Predicates", () => {
 			);
 			const card = document.querySelector("yt-lockup-view-model")!;
 			expect(resolveCardMeta(card, "/@mkbhd")).toBeNull();
+		});
+
+		// Shorts cards (ytd-reel-item-renderer) carry a /shorts/{id} anchor
+		// rather than /watch?v=. No live-captured Shorts fixture is available
+		// yet (spec G2 marks card-shorts.html as WAJIB/CRITICAL — follow-up),
+		// so these synthetic DOMs guard the two resolveVideoId paths a real
+		// fixture would settle: (1) the a#thumbnail fast-path when the
+		// thumbnail anchor IS /shorts/{id}; (2) the a[href*="/shorts/"]
+		// durable fallback when there is no id-anchor at all.
+		it("resolves meta via a#thumbnail fast-path when the thumbnail anchor is /shorts/{id}", () => {
+			const { document } = parseHTML(
+				`<body><ytd-reel-item-renderer>
+					<a id="thumbnail" href="/shorts/dQw4w9WgXcQ">
+						<img src="https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg" />
+					</a>
+					<h3><a href="/shorts/dQw4w9WgXcQ">A Short Title</a></h3>
+				</ytd-reel-item-renderer></body>`,
+			);
+			const card = document.querySelector("ytd-reel-item-renderer")!;
+			const meta = resolveCardMeta(card);
+			expect(meta).not.toBeNull();
+			expect(meta?.videoId).toBe("dQw4w9WgXcQ");
+			expect(meta?.title.length).toBeGreaterThan(0);
+		});
+
+		it("resolves meta via the a[href*='/shorts/'] fallback when no id-anchor is present", () => {
+			// Card has NO a#thumbnail / a#video-title-link / a#video-title, so the
+			// fast-path returns null and the durable /shorts/ anchor loop must fire.
+			const { document } = parseHTML(
+				`<body><ytd-reel-item-renderer>
+					<span class="thumb-no-id"><img src="https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg" /></span>
+					<h3><a href="/shorts/dQw4w9WgXcQ">A Short Title</a></h3>
+				</ytd-reel-item-renderer></body>`,
+			);
+			const card = document.querySelector("ytd-reel-item-renderer")!;
+			const meta = resolveCardMeta(card);
+			expect(meta).not.toBeNull();
+			expect(meta?.videoId).toBe("dQw4w9WgXcQ");
+			expect(meta?.title).toBe("A Short Title");
 		});
 	});
 

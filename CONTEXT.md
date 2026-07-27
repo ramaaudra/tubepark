@@ -55,5 +55,7 @@ A Parked Video MAY carry a `watching` flag (per-item, multi-allowed). `watching`
 - **Consumers**: Popup, Side Panel, grouping (via `openVideo`), and Background all cross the same seam instead of scattering 14+ direct `chrome.*` calls.
 
 ### Capture Mechanisms
-- **Context Menu Capture**: Right-click YouTube video **link** → "Park This Video". Scoped via `contexts: ["link"]` + `targetUrlPatterns: ["*://*.youtube.com/watch*"]` so it only appears on YouTube watch links, never blank space.
-- **Shortcut Capture**: Hover video card + press `P` (primary driver, MVP). Content-script keydown guard: ignore when focus is in `input/textarea/[contenteditable]`, and only fire when `:hover` resolves to a YouTube video-card wrapper (`ytd-rich-item-renderer` etc.). Prevents false capture while typing "P" in search/comments.
+- **Context Menu Capture**: Right-click a YouTube video **link** on a YouTube page → "Park This Video". Scoped via `contexts: ["link"]` + `targetUrlPatterns` (watch / youtu.be / shorts) on the link URL **and** `documentUrlPatterns: ["*://*.youtube.com/*"]` on the page URL, so the menu only appears where a content script is loaded and can actually park — never on blank space, never on YouTube links in other sites (silent-fail closure). See ADR-0001 (+ its G3 Correction).
+- **Hover-to-Park Capture**: A single floating button, portaled to `<body>` and positioned via `elementsFromPoint`, tracks whichever video card the pointer is over (primary driver, MVP). Geometry-based tracking survives YouTube's hover-preview portal, which breaks a naive CSS `:hover` approach — see `src/entrypoints/content.ts`.
+
+> There is no keyboard shortcut. An early design had "hover + `P`" as the primary driver (still described that way in ADR-0001); it was replaced by the floating button and never implemented. Popup and Side Panel copy still advertises `P` — tracked as G1 in `docs/ROADMAP.md`.

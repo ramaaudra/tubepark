@@ -26,6 +26,14 @@ const THUMBNAIL_SELECTORS = [
 	"a#thumbnail",
 ];
 
+/**
+ * Anchor selector shared by resolveVideoId + resolveTitle's durable fallback
+ * loops. /watch?v= covers watch-page + view-model lockups; /shorts/ covers
+ * reel-item cards (Shorts, G2). Kept as one constant so a future capture path
+ * is a one-site edit, not two — the two loops already drifted once.
+ */
+const VIDEO_ANCHOR_SELECTOR = 'a[href*="/watch?v="], a[href*="/shorts/"]';
+
 export function extractYouTubeVideoId(urlStr: string): string | null {
 	if (!urlStr) return null;
 
@@ -39,6 +47,13 @@ export function extractYouTubeVideoId(urlStr: string): string | null {
 
 		if (url.pathname === "/watch" || url.pathname.startsWith("/watch")) {
 			return url.searchParams.get("v");
+		}
+
+		// Shorts are first-class videos (G2): /shorts/{id} carries an ordinary
+		// video id in the path. Park/queue/play all use /watch?v={id} downstream.
+		if (url.pathname.startsWith("/shorts/")) {
+			const id = url.pathname.slice("/shorts/".length).split("/")[0];
+			return id ? id.split("?")[0] : null;
 		}
 
 		return null;
@@ -104,8 +119,11 @@ function resolveVideoId(card: {
 	const fromId = extractYouTubeVideoId(anchorHref(idAnchor));
 	if (fromId) return fromId;
 
-	// Durable path: any /watch?v= anchor in the card (view-model lockups).
-	const anchors = card.querySelectorAll('a[href*="/watch?v="]');
+	// Durable path: any /watch?v= or /shorts/ anchor in the card.
+	// /shorts/ covers reel-item cards (Shorts) whose anchor is /shorts/{id};
+	// no live Shorts fixture could be captured, so this selector is the
+	// defensive fallback per spec G2 rather than a confirmed fast-path.
+	const anchors = card.querySelectorAll(VIDEO_ANCHOR_SELECTOR);
 	for (const anchor of Array.from(anchors)) {
 		const id = extractYouTubeVideoId(anchorHref(anchor));
 		if (id) return id;
@@ -124,7 +142,7 @@ function resolveTitle(card: {
 	const heading = text(card.querySelector("h3"));
 	if (heading) return heading;
 
-	const anchors = card.querySelectorAll('a[href*="/watch?v="]');
+	const anchors = card.querySelectorAll(VIDEO_ANCHOR_SELECTOR);
 	for (const anchor of Array.from(anchors)) {
 		const t = text(anchor);
 		if (t) return t;
