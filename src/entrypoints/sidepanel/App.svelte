@@ -10,6 +10,7 @@
     togglePinned,
   } from '../../shared/storage';
   import { groupAndSortVideos, formatAgeBadge } from '../../shared/grouping';
+  import { extractYouTubeVideoId } from '../../shared/capture-predicates';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import Thumbnail from '../../components/Thumbnail.svelte';
   import Icon from '../../components/Icon.svelte';
@@ -42,6 +43,17 @@
     }
     if (typeof chrome !== 'undefined' && chrome.tabs?.onActivated) {
       chrome.tabs.onActivated.addListener(() => loadData());
+    }
+    // YouTube is a SPA — switching video in the same tab does not fire
+    // onActivated, so the Now Playing indicator would go stale. onUpdated
+    // fires on URL change (including SPA pushState); reload only when the
+    // new URL is a YouTube video so we don't churn on title/favicon/status.
+    if (typeof chrome !== 'undefined' && chrome.tabs?.onUpdated) {
+      chrome.tabs.onUpdated.addListener((_id, changeInfo) => {
+        if (changeInfo.url && extractYouTubeVideoId(changeInfo.url)) {
+          loadData();
+        }
+      });
     }
   });
 
