@@ -3,6 +3,7 @@
   import { flip } from 'svelte/animate';
   import { getQueueState, parkVideo, removeVideo, type QueueState } from '../../shared/storage';
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
+  import { MSG, type TabMeta } from '../../shared/messages';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import Thumbnail from '../../components/Thumbnail.svelte';
   import Icon from '../../components/Icon.svelte';
@@ -12,6 +13,51 @@
   import { parkIn, parkOut } from '../../components/transitions';
   import { flyChip } from '../../components/fly-chip';
   import type { ParkedVideo, CapacityState } from '../../shared/types';
+
+  const FALLBACK_META: TabMeta = { channel: 'YouTube', currentTime: 0 };
+
+  /** Ask the content script on a YouTube tab for channel + currentTime (G4+F4).
+   * Falls back to `{ channel: 'YouTube', currentTime: 0 }` when the CS is not
+   * loaded yet (tab still loading) or chrome.runtime.lastError fires. */
+  function fetchTabMeta(tabId: number): Promise<TabMeta> {
+    if (typeof chrome === 'undefined' || !chrome.tabs?.sendMessage) {
+      return Promise.resolve(FALLBACK_META);
+    }
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { type: MSG.GET_TAB_META }, (resp) => {
+        if (chrome.runtime.lastError || !resp || typeof resp !== 'object') {
+          resolve(FALLBACK_META);
+          return;
+        }
+        const channel =
+          typeof (resp as TabMeta).channel === 'string' && (resp as TabMeta).channel
+            ? (resp as TabMeta).channel
+            : FALLBACK_META.channel;
+        const currentTime =
+          typeof (resp as TabMeta).currentTime === 'number'
+            ? Math.floor((resp as TabMeta).currentTime)
+            : 0;
+        resolve({ channel, currentTime });
+      });
+    });
+  }
+
+  /** Build a ParkedVideo for tab-park: title from the tab, channel + optional
+   * resumeAt from GET_TAB_META. Omits resumeAt when currentTime is 0 (F4). */
+  function parkedFromTab(
+    videoId: string,
+    tabTitle: string | undefined,
+    meta: TabMeta,
+  ): ParkedVideo {
+    const payload: ParkedVideo = {
+      id: videoId,
+      title: (tabTitle || 'YouTube Video').replace('- YouTube', '').trim(),
+      channel: meta.channel,
+      addedAt: Date.now(),
+    };
+    if (meta.currentTime > 0) payload.resumeAt = meta.currentTime;
+    return payload;
+  }
 
   let queue = $state<ParkedVideo[]>([]);
   let capacity = $state<CapacityState>({ status: 'safe', count: 0, max: 200, percentage: 0 });
@@ -61,13 +107,12 @@
     const videoId = extractYouTubeVideoId(currentTabInfo.url);
     if (!videoId) return;
 
-    const title = (currentTabInfo.title || 'YouTube Video').replace('- YouTube', '').trim();
-    const result = await parkVideo({
-      id: videoId,
-      title,
-      channel: 'YouTube',
-      addedAt: Date.now(),
-    });
+    const meta = currentTabInfo.id
+      ? await fetchTabMeta(currentTabInfo.id)
+      : FALLBACK_META;
+    const result = await parkVideo(
+      parkedFromTab(videoId, currentTabInfo.title, meta),
+    );
 
     if (result.success || result.duplicate) {
       launchChip(parkBtnEl);
@@ -87,13 +132,9 @@
       const videoId = extractYouTubeVideoId(tab.url);
       if (!videoId) continue;
 
-      const title = (tab.title || 'YouTube Video').replace('- YouTube', '').trim();
-      const result = await parkVideo({
-        id: videoId,
-        title,
-        channel: 'YouTube',
-        addedAt: Date.now(),
-      });
+      // One GET_TAB_META per tab (G4 channel + F4 currentTime). CS-miss → fallback.
+      const meta = tab.id ? await fetchTabMeta(tab.id) : FALLBACK_META;
+      const result = await parkVideo(parkedFromTab(videoId, tab.title, meta));
 
       if (result.success || result.duplicate) {
         parked += 1;
@@ -113,8 +154,8 @@
     window.close();
   }
 
-  async function handlePlay(videoId: string) {
-    await tabOps.openVideo(videoId);
+  async function handlePlay(video: ParkedVideo) {
+    await tabOps.openVideo(video.id, video.resumeAt);
     window.close();
   }
 
@@ -215,7 +256,7 @@
             out:parkOut={{ reduced }}
             animate:flip={{ duration: reduced ? 150 : 300 }}
           >
-            <button class="thumb" onclick={() => handlePlay(video.id)} aria-label="Putar {video.title}">
+            <button class="thumb" onclick={() => handlePlay(video)} aria-label="Putar {video.title}">
               <Thumbnail videoId={video.id} channel={video.channel} />
             </button>
             <div class="card-body">

@@ -93,7 +93,8 @@
   });
 
   async function handlePlay(video: ParkedVideo) {
-    await tabOps.openVideo(video.id);
+    // F4: pass resumeAt so openVideo builds ?v=ID&t=N when set.
+    await tabOps.openVideo(video.id, video.resumeAt);
   }
 
   async function handleTogglePinned(id: string) {

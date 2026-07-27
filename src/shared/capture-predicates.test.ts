@@ -7,8 +7,10 @@ import {
 	extractYouTubeVideoId,
 	isYouTubeWatchUrl,
 	isMatchingVideoCardSelector,
+	readMainVideoCurrentTime,
 	resolveCardMeta,
 	resolveThumbnail,
+	resolveWatchPageChannel,
 	YOUTUBE_VIDEO_CARD_SELECTORS,
 } from "./capture-predicates";
 
@@ -276,6 +278,109 @@ describe("Capture Predicates", () => {
 			const pos = computeButtonPosition(thumbRect, SIZE);
 			const buttonBottom = pos.top + SIZE;
 			expect(buttonBottom).toBeLessThanOrEqual(thumbRect.bottom);
+		});
+	});
+
+	// G4: watch-page channel lives under #owner / ytd-channel-name — not the
+	// per-card selectors resolveChannel uses. Fallback chain mirrors
+	// THUMBNAIL_SELECTORS (YouTube churns watch-page DOM the same way).
+	// No live-captured watch-page fixture yet (spec marks it WAJIB); these
+	// synthetic DOMs pin the selector chain the fixture will later settle.
+	describe("resolveWatchPageChannel", () => {
+		it("reads channel from #owner ytd-channel-name (primary)", () => {
+			const { document } = parseHTML(
+				`<body>
+					<div id="owner">
+						<ytd-channel-name><a>MKBHD</a></ytd-channel-name>
+					</div>
+				</body>`,
+			);
+			expect(resolveWatchPageChannel(document)).toBe("MKBHD");
+		});
+
+		it("falls back to #owner #channel-name", () => {
+			const { document } = parseHTML(
+				`<body>
+					<div id="owner">
+						<div id="channel-name">Linus Tech Tips</div>
+					</div>
+				</body>`,
+			);
+			expect(resolveWatchPageChannel(document)).toBe("Linus Tech Tips");
+		});
+
+		it("falls back to ytd-watch-metadata ytd-channel-name", () => {
+			const { document } = parseHTML(
+				`<body>
+					<ytd-watch-metadata>
+						<ytd-channel-name>Veritasium</ytd-channel-name>
+					</ytd-watch-metadata>
+				</body>`,
+			);
+			expect(resolveWatchPageChannel(document)).toBe("Veritasium");
+		});
+
+		it("returns 'YouTube' when no channel node is present", () => {
+			const { document } = parseHTML(`<body><div id="player"></div></body>`);
+			expect(resolveWatchPageChannel(document)).toBe("YouTube");
+		});
+
+		it("ignores empty channel text and keeps walking the chain", () => {
+			const { document } = parseHTML(
+				`<body>
+					<div id="owner"><ytd-channel-name>   </ytd-channel-name></div>
+					<ytd-watch-metadata><ytd-channel-name>Real Channel</ytd-channel-name></ytd-watch-metadata>
+				</body>`,
+			);
+			expect(resolveWatchPageChannel(document)).toBe("Real Channel");
+		});
+	});
+
+	// F4: resume position from the main HTML5 <video>. YouTube may mount an ad
+	// pre-roll <video> alongside the player; pick the largest visible one so
+	// park-mid-watch captures the content position, not a 0s ad stub.
+	describe("readMainVideoCurrentTime", () => {
+		it("returns 0 when no <video> is present", () => {
+			const { document } = parseHTML(`<body><div></div></body>`);
+			expect(readMainVideoCurrentTime(document)).toBe(0);
+		});
+
+		it("floors a single video's currentTime to an integer second", () => {
+			const { document } = parseHTML(
+				`<body><video id="v"></video></body>`,
+			);
+			const v = document.querySelector("video") as HTMLVideoElement;
+			Object.defineProperty(v, "currentTime", { value: 91.7, configurable: true });
+			Object.defineProperty(v, "clientWidth", { value: 640, configurable: true });
+			Object.defineProperty(v, "clientHeight", { value: 360, configurable: true });
+			expect(readMainVideoCurrentTime(document)).toBe(91);
+		});
+
+		it("picks the largest <video> when multiple are present (ad + main)", () => {
+			const { document } = parseHTML(
+				`<body>
+					<video id="ad"></video>
+					<video id="main"></video>
+				</body>`,
+			);
+			const ad = document.querySelector("#ad") as HTMLVideoElement;
+			const main = document.querySelector("#main") as HTMLVideoElement;
+			Object.defineProperty(ad, "currentTime", { value: 3, configurable: true });
+			Object.defineProperty(ad, "clientWidth", { value: 1, configurable: true });
+			Object.defineProperty(ad, "clientHeight", { value: 1, configurable: true });
+			Object.defineProperty(main, "currentTime", {
+				value: 300.2,
+				configurable: true,
+			});
+			Object.defineProperty(main, "clientWidth", {
+				value: 1280,
+				configurable: true,
+			});
+			Object.defineProperty(main, "clientHeight", {
+				value: 720,
+				configurable: true,
+			});
+			expect(readMainVideoCurrentTime(document)).toBe(300);
 		});
 	});
 });

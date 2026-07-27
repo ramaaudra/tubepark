@@ -165,6 +165,59 @@ function resolveChannel(
 	return "YouTube Channel";
 }
 
+/**
+ * Ordered watch-page channel selectors, newest-first. The watch page puts the
+ * channel under `#owner` / `ytd-watch-metadata` — not inside a video card — so
+ * `resolveChannel` cannot see it. Fallback chain mirrors THUMBNAIL_SELECTORS:
+ * YouTube churns the watch-page owner block the same way it churns cards.
+ * Used by GET_TAB_META (G4 tab-park) and the CONTEXT_MENU_PARK card-miss path.
+ */
+const WATCH_PAGE_CHANNEL_SELECTORS = [
+	"#owner ytd-channel-name",
+	"#owner #channel-name",
+	"ytd-watch-metadata ytd-channel-name",
+];
+
+/**
+ * Read the channel name from a YouTube watch page document. Returns the
+ * product fallback `'YouTube'` (F9-3 "tak dikenal" bucket) when no selector
+ * matches — park still succeeds; only grouping/placeholder quality degrades.
+ */
+export function resolveWatchPageChannel(doc: {
+	querySelector: (sel: string) => Element | null;
+}): string {
+	for (const selector of WATCH_PAGE_CHANNEL_SELECTORS) {
+		const name = text(doc.querySelector(selector));
+		if (name) return name;
+	}
+	return "YouTube";
+}
+
+/**
+ * Read the main player position (floored seconds) from a watch-page document.
+ * YouTube may mount an ad pre-roll `<video>` alongside the content player;
+ * pick the largest by client area so mid-watch park captures content time,
+ * not a 0s ad stub. Returns 0 when no player is ready (caller treats 0 as
+ * "no resumeAt" — see F4: never store t=0).
+ */
+export function readMainVideoCurrentTime(doc: {
+	querySelectorAll: (sel: string) => ArrayLike<Element>;
+}): number {
+	const videos = Array.from(doc.querySelectorAll("video")) as HTMLVideoElement[];
+	if (videos.length === 0) return 0;
+
+	let best: HTMLVideoElement | null = null;
+	let bestArea = -1;
+	for (const v of videos) {
+		const area = (v.clientWidth || 0) * (v.clientHeight || 0);
+		if (area >= bestArea) {
+			best = v;
+			bestArea = area;
+		}
+	}
+	return Math.floor(best?.currentTime ?? 0);
+}
+
 function channelHandleFromPath(pathname?: string): string | null {
 	if (!pathname) return null;
 	const match = pathname.match(/\/(@[^/?#]+)/);

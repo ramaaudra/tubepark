@@ -14,11 +14,18 @@ export interface NowPlayingTab {
 	windowId: number;
 }
 
+/** Build a YouTube watch URL, optionally with a resume timestamp (F4).
+ * Pure so the t= rules are unit-testable without chrome.* fakes. */
+export function buildWatchUrl(videoId: string, resumeAt?: number): string {
+	const base = `https://www.youtube.com/watch?v=${videoId}`;
+	return resumeAt && resumeAt > 0 ? `${base}&t=${resumeAt}` : base;
+}
+
 export interface TabOperations {
 	getActiveTab(): Promise<{ id: number; url: string; title: string } | null>;
 	getWatchTabs(): Promise<SimpleTab[]>;
 	closeTab(id: number): Promise<void>;
-	openVideo(videoId: string): Promise<void>;
+	openVideo(videoId: string, resumeAt?: number): Promise<void>;
 	openSidePanel(): Promise<void>;
 	getNowPlayingTab(): Promise<NowPlayingTab | null>;
 }
@@ -53,9 +60,9 @@ export class RealTabOperations implements TabOperations {
 		await this.c.tabs.remove(id);
 	}
 
-	async openVideo(videoId: string) {
+	async openVideo(videoId: string, resumeAt?: number) {
 		if (!this.c?.tabs) return;
-		const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
+		const targetUrl = buildWatchUrl(videoId, resumeAt);
 		const allTabs = await this.c.tabs.query({});
 
 		const existingWatchTab = allTabs.find((tab) => {
@@ -123,8 +130,8 @@ export class TestTabOperations implements TabOperations {
 		this.calls.push({ method: "closeTab", args: [id] });
 	}
 
-	async openVideo(videoId: string) {
-		this.calls.push({ method: "openVideo", args: [videoId] });
+	async openVideo(videoId: string, resumeAt?: number) {
+		this.calls.push({ method: "openVideo", args: [videoId, resumeAt] });
 	}
 
 	async openSidePanel() {

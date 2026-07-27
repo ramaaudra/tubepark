@@ -27,4 +27,14 @@ export const MSG = {
 	 * removal set changed. `pendingIds` is the list of videoIds currently hidden
 	 * by a grace-period deletion (empty after commit or undo). */
 	PENDING_REMOVAL_CHANGED: "PENDING_REMOVAL_CHANGED",
+	/** Popup → content script on a YouTube watch tab: read channel + currentTime
+	 * from the live DOM (G4+F4). Responds with `{ channel, currentTime }`. */
+	GET_TAB_META: "GET_TAB_META",
 } as const;
+
+/** Response shape for MSG.GET_TAB_META (content script → popup). */
+export interface TabMeta {
+	channel: string;
+	/** Floored seconds from the main HTML5 <video>. 0 when player not ready. */
+	currentTime: number;
+}

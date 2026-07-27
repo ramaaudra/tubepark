@@ -3,11 +3,14 @@ import {
 	type CardMeta,
 	computeButtonPosition,
 	extractYouTubeVideoId,
+	readMainVideoCurrentTime,
 	resolveCardMeta,
 	resolveThumbnail,
+	resolveWatchPageChannel,
 	YOUTUBE_VIDEO_CARD_SELECTORS,
 } from "../shared/capture-predicates";
 import { type IconName, type IconPath, icons } from "../shared/icons";
+import { MSG } from "../shared/messages";
 import type { ParkedVideo } from "../shared/types";
 
 const PARK_BTN_CLASS = "tubepark-park-btn";
@@ -291,13 +294,22 @@ export default defineContentScript({
 		// robust against YouTube's hover-preview portal. See FloatingParkButton.
 		new FloatingParkButton();
 
-		// Handle context menu park requests from background
+		// Handle popup tab-meta reads (G4+F4) and context-menu park requests.
 		chrome.runtime?.onMessage.addListener((message, _sender, sendResponse) => {
-			if (message?.type === "CONTEXT_MENU_PARK") {
+			// One round-trip per tab for park-from-tab: channel (G4) + currentTime (F4).
+			if (message?.type === MSG.GET_TAB_META) {
+				sendResponse({
+					channel: resolveWatchPageChannel(document),
+					currentTime: readMainVideoCurrentTime(document),
+				});
+				return false;
+			}
+
+			if (message?.type === MSG.CONTEXT_MENU_PARK) {
 				(async () => {
 					// Try to find the anchor element matching the link URL
 					const anchors = document.querySelectorAll<HTMLAnchorElement>(
-						'a[href*="watch"], a[href*="youtu.be"]',
+						'a[href*="watch"], a[href*="youtu.be"], a[href*="/shorts/"]',
 					);
 
 					let meta: CardMeta | null = null;
@@ -315,13 +327,14 @@ export default defineContentScript({
 					}
 
 					if (!meta) {
-						// Fallback: use videoId + tab title
+						// Card miss: title from document, channel from watch-page DOM
+						// when available (G4). Falls back to 'YouTube' off-watch pages.
 						meta = {
 							videoId: message.videoId,
 							title:
 								document.title.replace("- YouTube", "").trim() ||
 								"YouTube Video",
-							channel: "YouTube",
+							channel: resolveWatchPageChannel(document),
 						};
 					}
 
@@ -333,7 +346,7 @@ export default defineContentScript({
 					};
 
 					chrome.runtime.sendMessage(
-						{ type: "PARK_VIDEO_REQUEST", payload },
+						{ type: MSG.PARK_VIDEO_REQUEST, payload },
 						(result) => {
 							if (result?.success) {
 								showToast(`Diparkir: "${meta!.title}"`, "success");

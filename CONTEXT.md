@@ -11,7 +11,7 @@
 TubePark is a **Frictionless Visual Scratchpad** for YouTube: it converts a horizontal tab-bar mess into a vertical, thumbnail-rich, contextual queue. RAM saving is a side-effect bonus, not the headline feature.
 
 ### Entities
-- **Parked Video**: A minimal metadata record (id, title, channel, addedAt, optional pinned) captured from a YouTube tab/link. It is a *Queue* item, NOT a history/log entry.
+- **Parked Video**: A minimal metadata record (id, title, channel, addedAt, optional pinned, optional resumeAt) captured from a YouTube tab/link. It is a *Queue* item, NOT a history/log entry. `resumeAt` (seconds) is set only when parking a mid-watch tab; hover/context-menu park leave it undefined.
 - **TubePark Queue**: The active, temporary to-watch list stored in `chrome.storage.local` under `tubepark_queue`. No archive.
 
 > Originally specified as a *pure* queue whose only organizing axis was recency. ADR-0005 (2026-07-26) amends this to permit user-controlled organization — collections/tags, alternative groupings, manual ordering, search — while keeping "no archive, no history, no `watched` flag" binding and keeping Park itself a zero-decision action. That ADR fixes the direction only; the term, cardinality, and ordering precedence are still open, and no such organization exists in the code yet.
@@ -57,7 +57,8 @@ A removal in the Side Panel is a **grace-period request**, not an immediate comm
 - **Consumers**: Popup, Side Panel, grouping (via `openVideo`), and Background all cross the same seam instead of scattering 14+ direct `chrome.*` calls.
 
 ### Capture Mechanisms
-- **Context Menu Capture**: Right-click a YouTube video **link** on a YouTube page → "Park This Video". Scoped via `contexts: ["link"]` + `targetUrlPatterns` (watch / youtu.be / shorts) on the link URL **and** `documentUrlPatterns: ["*://*.youtube.com/*"]` on the page URL, so the menu only appears where a content script is loaded and can actually park — never on blank space, never on YouTube links in other sites (silent-fail closure). See ADR-0001 (+ its G3 Correction).
+- **Context Menu Capture**: Right-click a YouTube video **link** on a YouTube page → "Park This Video". Scoped via `contexts: ["link"]` + `targetUrlPatterns` (watch / youtu.be / shorts) on the link URL **and** `documentUrlPatterns: ["*://*.youtube.com/*"]` on the page URL, so the menu only appears where a content script is loaded and can actually park — never on blank space, never on YouTube links in other sites (silent-fail closure). See ADR-0001 (+ its G3 Correction). Card-miss fallback reads channel via `resolveWatchPageChannel()` (same as tab-park).
 - **Hover-to-Park Capture**: A single floating button, portaled to `<body>` and positioned via `elementsFromPoint`, tracks whichever video card the pointer is over (primary driver, MVP). Geometry-based tracking survives YouTube's hover-preview portal, which breaks a naive CSS `:hover` approach — see `src/entrypoints/content.ts`.
+- **Tab-Park Capture** (popup current/all): content script `GET_TAB_META` returns `{ channel, currentTime }` from the watch-page DOM — no network, no new permissions. Channel fallback is `'YouTube'` (F9-3 "tak dikenal"). `currentTime > 0` becomes `resumeAt`; play builds `?v=ID&t=N` via `openVideo(id, resumeAt)`.
 
 > There is no keyboard shortcut. An early design had "hover + `P`" as the primary driver (still described that way in ADR-0001); it was replaced by the floating button and never implemented. Popup and Side Panel copy still advertises `P` — tracked as G1 in `docs/ROADMAP.md`.

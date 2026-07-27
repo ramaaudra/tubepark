@@ -1,5 +1,31 @@
 import { describe, it, expect, vi } from "vitest";
-import { RealTabOperations, TestTabOperations } from "./tab-operations";
+import {
+	buildWatchUrl,
+	RealTabOperations,
+	TestTabOperations,
+} from "./tab-operations";
+
+// F4: pure URL construction for resume playback. Independent of chrome.* so
+// the t= rules (omit 0/undefined, integer seconds) stay pinned without a fake.
+describe("buildWatchUrl", () => {
+	it("builds bare watch URL when resumeAt is undefined", () => {
+		expect(buildWatchUrl("abc123")).toBe(
+			"https://www.youtube.com/watch?v=abc123",
+		);
+	});
+
+	it("builds bare watch URL when resumeAt is 0", () => {
+		expect(buildWatchUrl("abc123", 0)).toBe(
+			"https://www.youtube.com/watch?v=abc123",
+		);
+	});
+
+	it("appends integer t= when resumeAt > 0", () => {
+		expect(buildWatchUrl("abc123", 919)).toBe(
+			"https://www.youtube.com/watch?v=abc123&t=919",
+		);
+	});
+});
 
 describe("TestTabOperations", () => {
 	it("returns configured active tab", async () => {
@@ -45,7 +71,19 @@ describe("TestTabOperations", () => {
 	it("records openVideo call with videoId", async () => {
 		const ops = new TestTabOperations();
 		await ops.openVideo("abc123");
-		expect(ops.calls).toContainEqual({ method: "openVideo", args: ["abc123"] });
+		expect(ops.calls).toContainEqual({
+			method: "openVideo",
+			args: ["abc123", undefined],
+		});
+	});
+
+	it("records openVideo call with resumeAt", async () => {
+		const ops = new TestTabOperations();
+		await ops.openVideo("abc123", 919);
+		expect(ops.calls).toContainEqual({
+			method: "openVideo",
+			args: ["abc123", 919],
+		});
 	});
 
 	it("records openSidePanel call", async () => {
@@ -70,7 +108,7 @@ describe("TestTabOperations", () => {
 
 		expect(ops.calls).toEqual([
 			{ method: "closeTab", args: [1] },
-			{ method: "openVideo", args: ["vid1"] },
+			{ method: "openVideo", args: ["vid1", undefined] },
 			{ method: "closeTab", args: [2] },
 		]);
 	});
@@ -226,6 +264,59 @@ describe("RealTabOperations", () => {
 				active: true,
 			});
 			expect(chrome.windows.update).toHaveBeenCalledWith(1, { focused: true });
+		});
+
+		// F4: resumeAt builds ?v=ID&t=N. Omit t when undefined/0 so play starts
+		// cleanly; integer seconds only (YouTube accepts t=90, not 1m30s).
+		it("appends &t= when resumeAt > 0 on existing tab update", async () => {
+			const chrome = fakeChrome();
+			chrome.tabs.query.mockResolvedValue([
+				{ id: 10, url: "https://youtube.com/watch?v=existing", windowId: 1 },
+			]);
+
+			const ops = new RealTabOperations(chrome as any);
+			await ops.openVideo("newvideo", 919);
+
+			expect(chrome.tabs.update).toHaveBeenCalledWith(10, {
+				url: "https://www.youtube.com/watch?v=newvideo&t=919",
+				active: true,
+			});
+		});
+
+		it("appends &t= when resumeAt > 0 on new tab create", async () => {
+			const chrome = fakeChrome();
+			chrome.tabs.query.mockResolvedValue([]);
+
+			const ops = new RealTabOperations(chrome as any);
+			await ops.openVideo("newvideo", 90);
+
+			expect(chrome.tabs.create).toHaveBeenCalledWith({
+				url: "https://www.youtube.com/watch?v=newvideo&t=90",
+			});
+		});
+
+		it("omits t= when resumeAt is 0", async () => {
+			const chrome = fakeChrome();
+			chrome.tabs.query.mockResolvedValue([]);
+
+			const ops = new RealTabOperations(chrome as any);
+			await ops.openVideo("newvideo", 0);
+
+			expect(chrome.tabs.create).toHaveBeenCalledWith({
+				url: "https://www.youtube.com/watch?v=newvideo",
+			});
+		});
+
+		it("omits t= when resumeAt is undefined", async () => {
+			const chrome = fakeChrome();
+			chrome.tabs.query.mockResolvedValue([]);
+
+			const ops = new RealTabOperations(chrome as any);
+			await ops.openVideo("newvideo");
+
+			expect(chrome.tabs.create).toHaveBeenCalledWith({
+				url: "https://www.youtube.com/watch?v=newvideo",
+			});
 		});
 	});
 
