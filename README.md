@@ -32,6 +32,23 @@ Instead of a wall of identical tabs, TubePark gives you a clean vertical queue w
 - **Capacity guardrails** — a 200-item cap with a *safe → warning → full* meter that nudges you to curate before the queue becomes its own kind of clutter.
 - **Light & dark themes** — a "taman" (garden) palette that follows your system: *taman siang* by day, *taman malam* by night.
 
+## Screenshots
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><img src="docs/images/popup.webp" alt="TubePark Popup — fast-action surface" /></td>
+      <td align="center"><img src="docs/images/sidepanel.webp" alt="TubePark Side Panel — persistent review workspace" /></td>
+    </tr>
+    <tr>
+      <th>Popup</th>
+      <th>Side Panel</th>
+    </tr>
+  </table>
+</div>
+
+The **Popup** is the fast-action surface — park the current tab, park all tabs, glance at recent items. The **Side Panel** is the persistent review workspace — grouped queue, pin, play, and remove.
+
 ## Getting started
 
 ### Install from a release
