@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { flip } from 'svelte/animate';
-  import { fly } from 'svelte/transition';
+  import { fly, scale } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { getQueueState, togglePinned, requestRemoval, cancelRemoval, getUiState, saveUiState, mutateQueue, deriveCollections, type QueueState } from '../../shared/storage';
   import { groupAndSortVideos, formatAgeBadge } from '../../shared/grouping';
   import { matchesSearch, formatDuration } from '../../shared/filters';
@@ -337,6 +338,7 @@
         bind:this={tabMenuEl}
         style:top="{menuPos.top}px"
         style:left="{menuPos.left}px"
+        transition:scale={{ duration: reduced ? 120 : 160, start: reduced ? 1 : 0.94, easing: cubicOut }}
       >
         <button type="button" role="menuitem" onclick={() => void startRename()}>Rename</button>
       </div>
@@ -391,7 +393,7 @@
             ondrop={() => { if (video.pinned) void dropOn(video.id); }}
             in:parkIn={{ reduced }}
             out:parkOut={{ reduced }}
-            animate:flip={{ duration: reduced ? 150 : 320 }}
+            animate:flip={{ duration: reduced ? 150 : 250 }}
           >
             {#if selecting}
               <label class="check" class:on={isSelected}>
@@ -412,7 +414,7 @@
       </section>
     {/each}
   </div>
-  {#if pendingCount}<div class="toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300 }}><span>{pendingCount > 1 ? `${pendingCount} videos removed` : 'Video removed'}</span><button onclick={undo}>Undo</button></div>{/if}
+  {#if pendingCount}<div class="toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300, easing: cubicOut }}><span>{pendingCount > 1 ? `${pendingCount} videos removed` : 'Video removed'}</span><button onclick={undo}>Undo</button></div>{/if}
 </main>
 
 <style>
@@ -439,7 +441,7 @@
   .tab-item.active .tab{border-top-right-radius:0;border-bottom-right-radius:0;border-right:0}
   .tab-more{border-top-left-radius:0;border-bottom-left-radius:0;padding:5px 7px;line-height:1;font-weight:700;letter-spacing:.04em;position:relative;z-index:1}
   .tab-item.active .tab-more{background:var(--tp-accent);color:var(--tp-accent-contrast);border-color:var(--tp-accent)}
-  .tab-menu{position:fixed;z-index:40;min-width:120px;padding:4px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-surface);box-shadow:0 8px 24px rgba(0,0,0,.28);display:grid}
+  .tab-menu{position:fixed;z-index:40;min-width:120px;padding:4px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-surface);box-shadow:0 8px 24px rgba(0,0,0,.28);display:grid;transform-origin:top right}
   .tab-menu button{border:0;text-align:left;border-radius:6px}
   .tab-menu button:hover{background:var(--tp-surface-2)}
   .rename-input{box-sizing:border-box;width:140px;padding:5px 8px;border:1px solid var(--tp-accent);border-radius:6px;background:var(--tp-surface);color:var(--tp-text)}
@@ -466,10 +468,13 @@
   h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--tp-text-2)}
   h2 span{background:var(--tp-surface-2);border-radius:10px;padding:1px 6px}
   .unknown{opacity:.7}
-  article{display:flex;align-items:flex-start;gap:9px;padding:9px;margin-top:8px;background:var(--tp-surface);border:1px solid var(--tp-border);border-radius:10px;transition:border-color .15s ease, background-color .15s ease}
+  article{display:flex;align-items:flex-start;gap:9px;padding:9px;margin-top:8px;background:var(--tp-surface);border:1px solid var(--tp-border);border-radius:10px;transition:border-color .15s ease, background-color .15s ease, transform .15s var(--tp-ease-gentle)}
   article.pinned,article.playing{border-color:var(--tp-accent)}
   article.selected{border-color:var(--tp-accent);background:color-mix(in srgb, var(--tp-accent) 10%, var(--tp-surface))}
-  .check{position:relative;flex-shrink:0;width:18px;height:18px;margin-top:2px;border:1px solid var(--tp-border);border-radius:5px;background:var(--tp-bg);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease, border-color .12s ease, box-shadow .12s ease}
+  @media (hover: hover) and (pointer: fine) {
+    article:hover { transform: translateY(-2px); }
+  }
+  .check{position:relative;flex-shrink:0;width:18px;height:18px;margin-top:2px;border:1px solid var(--tp-border);border-radius:5px;background:var(--tp-bg);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease, border-color .12s ease}
   .check:hover{border-color:var(--tp-text-3)}
   .check.on{background:var(--tp-accent);border-color:var(--tp-accent);box-shadow:0 0 0 1px color-mix(in srgb, var(--tp-accent) 35%, transparent)}
   .check input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}

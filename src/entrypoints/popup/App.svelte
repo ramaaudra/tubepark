@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { flip } from 'svelte/animate';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import { getQueueState, parkVideo, requestRemoval, cancelRemoval, type QueueState } from '../../shared/storage';
   import { extractYouTubeVideoId, cleanYouTubeTitle } from '../../shared/capture-predicates';
   import { MSG, type TabMeta } from '../../shared/messages';
@@ -313,7 +315,7 @@
   </section>
 
   {#if pendingCount > 0}
-    <div class="undo-toast"><span>Video removed</span><button onclick={handleUndo}>Undo</button></div>
+    <div class="undo-toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 240, easing: cubicOut }}><span>Video removed</span><button onclick={handleUndo}>Undo</button></div>
   {/if}
 </main>
 
@@ -566,9 +568,12 @@
   }
 
   .card:hover {
-    transform: translateY(-2px);
     box-shadow: var(--tp-shadow-lift);
     border-color: var(--tp-accent);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .card:hover { transform: translateY(-2px); }
   }
 
   .thumb {
@@ -622,7 +627,7 @@
   }
 
   .icon-btn:active {
-    transform: scale(0.9);
+    transform: scale(0.96);
   }
 
   .undo-toast {

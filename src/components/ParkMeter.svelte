@@ -47,7 +47,7 @@
 		border-radius: inherit;
 		background: var(--tp-accent);
 		transform-origin: left;
-		transition: transform var(--tp-dur-spring) var(--tp-ease-snappy);
+		transition: transform var(--tp-dur-move) var(--tp-ease-gentle);
 	}
 
 	.park-meter[data-status="warning"] .meter-fill {

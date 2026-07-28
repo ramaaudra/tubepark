@@ -414,7 +414,7 @@ function injectToastStyles() {
       color: #fff;
       opacity: 0;
       transform: translateY(10px);
-      transition: opacity 200ms ease, transform 200ms ease;
+      transition: opacity 200ms cubic-bezier(0.22, 1, 0.36, 1), transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       max-width: 320px;
       pointer-events: auto;
@@ -455,7 +455,6 @@ function injectToastStyles() {
     }
     .${PARK_BTN_CLASS}.tubepark-park-btn-parked { color: #facc15; }
     .${PARK_BTN_CLASS}:hover {
-      transform: scale(1.1);
       background: rgba(0, 0, 0, 0.85);
     }
     .${PARK_BTN_CLASS}:active {
@@ -487,10 +486,10 @@ function injectToastStyles() {
       font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       cursor: pointer;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease, opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+      opacity: 1;
     }
     .${WATCH_BTN_CLASS}:hover {
-      transform: scale(1.04);
       background: rgba(0, 0, 0, 0.9);
     }
     .${WATCH_BTN_CLASS}:active {
@@ -512,6 +511,28 @@ function injectToastStyles() {
       border-radius: 50%;
       background: #facc15;
       margin-left: 2px;
+    }
+
+    /* Fade the pill in on first show (display:none -> inline-flex). Exit is
+     * instant — the pill vanishes on SPA nav off /watch. */
+    @starting-style {
+      .${WATCH_BTN_CLASS} { opacity: 0; }
+    }
+
+    /* Hover motion is pointer-gated so a touch tap can't fire a false scale. */
+    @media (hover: hover) and (pointer: fine) {
+      .${PARK_BTN_CLASS}:hover { transform: scale(1.05); }
+      .${WATCH_BTN_CLASS}:hover { transform: scale(1.04); }
+    }
+
+    /* Reduced motion: keep opacity/color, drop all transform movement. */
+    @media (prefers-reduced-motion: reduce) {
+      .tubepark-toast { transform: none; transition: opacity 150ms ease; }
+      .${PARK_BTN_CLASS}, .${WATCH_BTN_CLASS} {
+        transition: background 150ms ease, border-color 150ms ease, opacity 160ms ease;
+      }
+      .${PARK_BTN_CLASS}:active,
+      .${WATCH_BTN_CLASS}:active { transform: none; }
     }
   `;
 

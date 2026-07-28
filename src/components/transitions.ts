@@ -13,7 +13,7 @@ interface ParkInParams {
  */
 export function parkIn(
 	_node: Element,
-	{ delay = 0, duration = 350, reduced = false }: ParkInParams = {},
+	{ delay = 0, duration = 240, reduced = false }: ParkInParams = {},
 ): TransitionConfig {
 	if (reduced) {
 		return {
