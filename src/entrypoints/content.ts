@@ -479,7 +479,7 @@ function injectToastStyles() {
       align-items: center;
       gap: 6px;
       padding: 7px 12px 7px 9px;
-      border: none;
+      border: 1px solid #2f9e44;
       border-radius: 999px;
       background: rgba(0, 0, 0, 0.78);
       backdrop-filter: blur(6px);
@@ -487,7 +487,7 @@ function injectToastStyles() {
       font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       cursor: pointer;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-      transition: transform 150ms ease, background 150ms ease;
+      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
     }
     .${WATCH_BTN_CLASS}:hover {
       transform: scale(1.04);
@@ -498,6 +498,12 @@ function injectToastStyles() {
     }
     .${WATCH_BTN_CLASS} .tubepark-watch-park-label {
       white-space: nowrap;
+    }
+    /* Identity-green border mirrors --tp-accent (tokens.css): #2f9e44 light,
+     * #51c86c dark — so the pill reads against YouTube's dark bg instead of
+     * camouflaging, and stays on-brand with the popup/side-panel accent. */
+    @media (prefers-color-scheme: dark) {
+      .${WATCH_BTN_CLASS} { border-color: #51c86c; }
     }
     .${WATCH_BTN_CLASS}.tubepark-watch-park-btn-parked::after {
       content: "";
