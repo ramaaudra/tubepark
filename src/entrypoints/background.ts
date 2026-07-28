@@ -146,6 +146,25 @@ function broadcastPendingChanged(): void {
 	}
 }
 
+/** Park one video through the mutation queue, attaching the active collection
+ * lens (F8-7) orthogonally — no filing-at-capture prompt (ADR-0005). Shared by
+ * PARK_VIDEO_REQUEST (hover / context-menu / popup park) and PARK_AND_CLOSE_TAB
+ * (watch-page park+close) so the capture→storage path is one block, not two
+ * drifted copies. Returns the ParkResult plus the collection the item was
+ * filed under (the caller uses it for toast copy). */
+async function parkOne(payload: ParkedVideo) {
+	return mutations.run(async () => {
+		const raw = await getRawQueue();
+		const ui = await getUiState();
+		const filed: ParkedVideo = ui.activeCollection
+			? { ...payload, collection: ui.activeCollection }
+			: payload;
+		const result = tryParkWithPending(raw, pending, filed);
+		if (result.success) await saveQueue([...raw, filed]);
+		return { ...result, collection: ui.activeCollection };
+	});
+}
+
 export default defineBackground(() => {
 	console.log("[TubePark] Background Service Worker initialized");
 
@@ -193,21 +212,31 @@ export default defineBackground(() => {
 			});
 		}
 
-		chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+		chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 			if (message?.type === MSG.PARK_VIDEO_REQUEST) {
 				(async () => {
-					const response = await mutations.run(async () => {
-						const raw = await getRawQueue();
-						const ui = await getUiState();
-						const payload: ParkedVideo = ui.activeCollection
-							? { ...message.payload, collection: ui.activeCollection }
-							: message.payload;
-						const result = tryParkWithPending(raw, pending, payload);
-						if (result.success) await saveQueue([...raw, payload]);
-						return { ...result, collection: ui.activeCollection };
-					});
+					const response = await parkOne(message.payload);
 					await updateBadge();
 					sendResponse(response);
+				})();
+				return true;
+			}
+
+			if (message?.type === MSG.PARK_AND_CLOSE_TAB) {
+				(async () => {
+					const result = await parkOne(message.payload);
+					await updateBadge();
+					// Respond first so the content script can toast on `full`. On
+					// success/duplicate the tab is about to be closed by the line below;
+					// the response is harmless there (the callback sees success and does
+					// nothing — the tab dies). Close ONLY on success/duplicate: a `full`
+					// park must NOT close the tab, or the video is lost with no queue
+					// entry to recover it from (F10-1, F10-8).
+					sendResponse(result);
+					const tabId = sender.tab?.id;
+					if ((result.success || result.duplicate) && typeof tabId === "number") {
+						chrome.tabs.remove(tabId, () => void chrome.runtime.lastError);
+					}
 				})();
 				return true;
 			}

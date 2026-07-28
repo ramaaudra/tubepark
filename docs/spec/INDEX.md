@@ -24,6 +24,7 @@ desain detail per item), `docs/adr/0005-lightweight-organization.md` (arah organ
 | [f1-f2-feedback-loop](f1-f2-feedback-loop.md) | F1+F2 | G5 (F1-2/F1-3) | warna aksen, badge theme |
 | [f3-duration](f3-duration.md) | F3 | mandiri | fixture baru (kritikal) |
 | [f5-search](f5-search.md) | F5 | F8-7 (kejelasan) | perf live filter |
+| [f10-watch-page-park-close](f10-watch-page-park-close.md) | F10 | mandiri (korelasi F8 lensa) | SPA nav detection, `sender.tab.id`, Shorts `<video>` |
 
 ## Urutan implementasi (dari dependensi)
 
@@ -36,6 +37,7 @@ desain detail per item), `docs/adr/0005-lightweight-organization.md` (arah organ
 7. **F6** — setelah G5.
 8. **F5** — mandiri (konsumen grouping), ship kapan saja setelah grouping stabil.
 9. **F3** — mandiri, tapi butuh fixture baru dulu.
+10. **F10** — mandiri (capture surface baru, reuse F4/G4 capture + G5 park). Ship kapan saja; cocok digabung fixture `watch-page.html` dgn G4+F4.
 
 ## Yang butuh verifikasi lapangan sebelum implementasi
 
@@ -44,6 +46,7 @@ desain detail per item), `docs/adr/0005-lightweight-organization.md` (arah organ
 - **G4 + F4**: fixture halaman watch — konfirmasi selector channel + `<video>`.
 - **G5**: `setTimeout` 5 detik andal di MV3 SW.
 - **F1**: broadcast `PENDING_REMOVAL_CHANGED` perf di content script.
+- **F10**: mekanisme deteksi SPA nav (`yt-navigate-finish`+`popstate` vs poll `location.href`); posisi responsif di viewport sempit.
 
 ## Yang masih terbuka (untuk spec, bukan implementasi)
 
@@ -52,3 +55,4 @@ desain detail per item), `docs/adr/0005-lightweight-organization.md` (arah organ
 - F7: ikon handle (grip path); pustaka drag.
 - F9: deteksi "tak dikenal" (string literal vs field boolean).
 - F4/F3: detail parsing/format.
+- F10: mekanisme deteksi SPA nav pasti; posisi `top` responsif vs topbar YouTube di viewport sempit.

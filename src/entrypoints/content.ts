@@ -1,6 +1,7 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 import {
 	type CardMeta,
+	buildWatchPagePayload,
 	cleanYouTubeTitle,
 	computeButtonPosition,
 	extractYouTubeVideoId,
@@ -63,8 +64,25 @@ function showToast(message: string, variant: "success" | "duplicate" | "full", o
 	}, onUndo ? 5000 : 2000);
 }
 
+const QUEUE_FULL_MSG = "Queue full (200/200) — remove old videos first.";
+
+/** Surface a park result as a toast. Shared by the hover-button and context-menu
+ * park paths, which both show the full success/duplicate/full cascade. The
+ * watch-page "park & close" path does NOT use this — it only toasts on `full`
+ * (success/duplicate close the tab, so a toast would never render before the
+ * content script dies). */
+function showParkResult(
+	result: { success?: boolean; duplicate?: boolean; full?: boolean; collection?: string | null },
+	title: string,
+): void {
+	if (result?.success) showToast(parkToastMessage(title, result.collection), "success");
+	else if (result?.duplicate) showToast(`Already in queue: "${title}"`, "duplicate");
+	else if (result?.full) showToast(QUEUE_FULL_MSG, "full");
+}
+
 const CARD_SELECTOR = YOUTUBE_VIDEO_CARD_SELECTORS.join(",");
 const PARK_BTN_SIZE = 28;
+const WATCH_BTN_CLASS = "tubepark-watch-park-btn";
 
 /**
  * A single floating park button, portaled to <body> and positioned over whichever
@@ -240,16 +258,15 @@ class FloatingParkButton {
 				if (result?.success) {
 					this.parkedIds.add(meta.videoId);
 					this.flash("check");
-					showToast(parkToastMessage(meta.title, result.collection), "success");
 				} else if (result?.duplicate) {
 					this.flash("pinFill");
-					showToast(`Already in queue: "${meta.title}"`, "duplicate");
 				} else if (result?.full) {
 					this.flash("warning");
-					showToast("Queue full (200/200) — remove old videos first.", "full");
 				} else {
 					this.btn.innerHTML = svgMarkup("pin");
+					return;
 				}
+				showParkResult(result, meta.title);
 			},
 		);
 	};
@@ -258,6 +275,124 @@ class FloatingParkButton {
 		this.btn.innerHTML = svgMarkup(icon);
 		setTimeout(() => this.renderState(), 2000);
 	}
+}
+
+/**
+ * Invoke `cb` whenever the YouTube SPA navigates (URL changes) without a full
+ * reload. YouTube is a single-page app: clicking another video updates the URL
+ * via history.pushState, so the content script keeps running but the watch-page
+ * button's videoId/state go stale. Three signals, all idempotent (cb re-resolves
+ * from `location.href` and only re-renders on real change):
+ *   - `yt-navigate-finish` — YouTube's canonical post-navigation event.
+ *   - `popstate` — browser back/forward.
+ *   - a 1s `location.href` poll — safety net for any transition the events miss.
+ */
+function onLocationChange(cb: () => void): () => void {
+	const invoke = () => cb();
+	document.addEventListener("yt-navigate-finish", invoke);
+	window.addEventListener("popstate", invoke);
+	const poll = setInterval(invoke, 1000);
+	return () => {
+		document.removeEventListener("yt-navigate-finish", invoke);
+		window.removeEventListener("popstate", invoke);
+		clearInterval(poll);
+	};
+}
+
+/**
+ * An always-visible "Park & close" button for the YouTube watch page (and
+ * Shorts), portaled to <body> and fixed to the top-right of the viewport.
+ *
+ * Sibling to `FloatingParkButton` (which park-onlys hovered sidebar cards). This
+ * one captures the MAIN video — including a `resumeAt` from the live <video> at
+ * click time — and closes the tab via a background relay (content scripts
+ * cannot call chrome.tabs.*). One click, no confirm, no undo: the queue +
+ * resumeAt is the safety net (CONTEXT.md "zero-decision park").
+ *
+ * Nol DOM coupling: viewport-fixed, so it survives YouTube's DOM churn the same
+ * way FloatingParkButton does. SPA navigation is watched via `onLocationChange`
+ * so the button re-resolves its videoId + parked-indicator without a reload.
+ */
+class WatchPageParkButton {
+	private readonly btn: HTMLButtonElement;
+	private parkedIds = new Set<string>();
+	private currentVideoId: string | null = null;
+
+	constructor() {
+		const btn = document.createElement("button");
+		btn.className = WATCH_BTN_CLASS;
+		btn.type = "button";
+		btn.innerHTML = `${svgMarkup("pin")}<span class="tubepark-watch-park-label">Park &amp; close</span>`;
+		btn.addEventListener("click", this.onClick);
+		document.body.appendChild(btn);
+		this.btn = btn;
+		void this.syncParkedIds();
+		this.refresh();
+		onLocationChange(() => this.refresh());
+	}
+
+	setParkedIds(ids: Set<string>) {
+		this.parkedIds = ids;
+		this.renderState();
+	}
+
+	private syncParkedIds = async () => {
+		const state = await chrome.runtime.sendMessage({ type: MSG.GET_QUEUE });
+		this.setParkedIds(parkedVideoIds(state?.queue ?? []));
+	};
+
+	private refresh = () => {
+		const videoId = extractYouTubeVideoId(location.href);
+		if (!videoId) {
+			this.currentVideoId = null;
+			this.hide();
+			return;
+		}
+		this.currentVideoId = videoId;
+		this.btn.setAttribute(PARK_BTN_ATTR, videoId);
+		this.renderState();
+		this.show();
+	};
+
+	private renderState() {
+		const parked = this.currentVideoId !== null && this.parkedIds.has(this.currentVideoId);
+		this.btn.classList.toggle("tubepark-watch-park-btn-parked", parked);
+		this.btn.title = parked
+			? "Already in TubePark — click to park & close this tab"
+			: "Park to TubePark & close this tab";
+	}
+
+	private show() {
+		this.btn.style.display = "inline-flex";
+	}
+
+	private hide() {
+		this.btn.style.display = "none";
+	}
+
+	private onClick = (e: MouseEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		if (!this.currentVideoId) return;
+		if (typeof chrome === "undefined" || !chrome.runtime) return;
+		// Build the payload at click time so `resumeAt` reflects the current
+		// playback position (the user may have been watching since the last
+		// refresh). Pure helper — unit-tested in capture-predicates.
+		const payload = buildWatchPagePayload(location.href, document);
+		if (!payload) return;
+		chrome.runtime.sendMessage(
+			{ type: MSG.PARK_AND_CLOSE_TAB, payload },
+			(result) => {
+				// The tab is about to be closed on success/duplicate (background
+				// calls chrome.tabs.remove). Only `full` keeps the tab alive —
+				// surface it so the user knows the park was rejected. Intentionally
+				// NOT showParkResult: success/duplicate toasts would never render
+				// (the content script dies with the tab) — see showParkResult doc.
+				if (chrome.runtime.lastError) return;
+				if (result?.full) showToast(QUEUE_FULL_MSG, "full");
+			},
+		);
+	};
 }
 
 function injectToastStyles() {
@@ -326,6 +461,52 @@ function injectToastStyles() {
     .${PARK_BTN_CLASS}:active {
       transform: scale(0.95);
     }
+
+    /*
+     * Watch-page "Park & close" pill — portaled to <body>, fixed top-right of
+     * the viewport, below YouTube's topbar. Always-visible on /watch + /shorts
+     * (WatchPageParkButton toggles display). Same max z-index as the floating
+     * button so it escapes YouTube's stacking contexts. A subtle yellow dot
+     * (::after) marks already-parked videos — a cosmetic indicator, NOT a
+     * toggle (click always park+close; F10-5).
+     */
+    .${WATCH_BTN_CLASS} {
+      position: fixed;
+      top: 70px;
+      right: 16px;
+      z-index: 2147483647;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px 7px 9px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(6px);
+      color: #fff;
+      font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+      transition: transform 150ms ease, background 150ms ease;
+    }
+    .${WATCH_BTN_CLASS}:hover {
+      transform: scale(1.04);
+      background: rgba(0, 0, 0, 0.9);
+    }
+    .${WATCH_BTN_CLASS}:active {
+      transform: scale(0.97);
+    }
+    .${WATCH_BTN_CLASS} .tubepark-watch-park-label {
+      white-space: nowrap;
+    }
+    .${WATCH_BTN_CLASS}.tubepark-watch-park-btn-parked::after {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #facc15;
+      margin-left: 2px;
+    }
   `;
 
 	document.head.appendChild(style);
@@ -341,9 +522,16 @@ export default defineContentScript({
 		// A single floating button tracks the hovered card by pointer geometry —
 		// robust against YouTube's hover-preview portal. See FloatingParkButton.
 		const floatingButton = new FloatingParkButton();
+		const watchButton = new WatchPageParkButton();
+		// One call site to sync both buttons' parked-id sets — a future third
+		// button is one edit here, not three scattered ones.
+		const syncAllButtons = (ids: Set<string>) => {
+			floatingButton.setParkedIds(ids);
+			watchButton.setParkedIds(ids);
+		};
 		chrome.storage?.onChanged.addListener(() => {
 			chrome.runtime.sendMessage({ type: MSG.GET_QUEUE }, (state) => {
-				floatingButton.setParkedIds(parkedVideoIds(state?.queue ?? []));
+				syncAllButtons(parkedVideoIds(state?.queue ?? []));
 			});
 		});
 
@@ -351,10 +539,10 @@ export default defineContentScript({
 		chrome.runtime?.onMessage.addListener((message, _sender, sendResponse) => {
 			if (message?.type === MSG.PENDING_REMOVAL_CHANGED) {
 				const pendingIds = Array.isArray(message.pendingIds) ? message.pendingIds : [];
-				floatingButton.setParkedIds(withoutPendingIds(floatingButton.getParkedIds(), pendingIds));
+				syncAllButtons(withoutPendingIds(floatingButton.getParkedIds(), pendingIds));
 				if (pendingIds.length === 0) {
 					chrome.runtime.sendMessage({ type: MSG.GET_QUEUE }, (state) => {
-						floatingButton.setParkedIds(parkedVideoIds(state?.queue ?? []));
+						syncAllButtons(parkedVideoIds(state?.queue ?? []));
 					});
 				}
 				return false;
@@ -411,16 +599,7 @@ export default defineContentScript({
 					chrome.runtime.sendMessage(
 						{ type: MSG.PARK_VIDEO_REQUEST, payload },
 						(result) => {
-							if (result?.success) {
-								showToast(parkToastMessage(meta!.title, result.collection), "success");
-							} else if (result?.duplicate) {
-								showToast(`Already in queue: "${meta!.title}"`, "duplicate");
-							} else if (result?.full) {
-								showToast(
-									"Queue full (200/200) — remove old videos first.",
-									"full",
-								);
-							}
+							showParkResult(result, meta!.title);
 							sendResponse({ ok: true });
 						},
 					);

@@ -1,4 +1,5 @@
 import { parseDurationSec } from "./filters";
+import type { ParkedVideo } from "./types";
 
 export const YOUTUBE_VIDEO_CARD_SELECTORS = [
 	"ytd-rich-item-renderer",
@@ -239,6 +240,40 @@ export function readMainVideoCurrentTime(doc: {
 		}
 	}
 	return Math.floor(best?.currentTime ?? 0);
+}
+
+/**
+ * Build a ParkedVideo for a watch-page "park & close" straight from the page
+ * URL + DOM — the content script IS the reader, so there is no GET_TAB_META
+ * round-trip (unlike the popup path, which messages the content script).
+ *
+ * Composes the four capture predicates above: `extractYouTubeVideoId` for the
+ * id, `cleanYouTubeTitle` for the title, `resolveWatchPageChannel` for the
+ * channel, `readMainVideoCurrentTime` for an optional `resumeAt` (only when
+ * the user is mid-watch — F4: never store t=0). Returns null for non-watch
+ * URLs so the caller can hide the button off-watch. Pure so the capture seam
+ * is unit-testable without a browser (F10-9).
+ */
+export function buildWatchPagePayload(
+	url: string,
+	doc: {
+		title: string;
+		querySelector: (sel: string) => Element | null;
+		querySelectorAll: (sel: string) => ArrayLike<Element>;
+	},
+	now: number = Date.now(),
+): ParkedVideo | null {
+	const videoId = extractYouTubeVideoId(url);
+	if (!videoId) return null;
+	const payload: ParkedVideo = {
+		id: videoId,
+		title: cleanYouTubeTitle(doc.title) || "YouTube Video",
+		channel: resolveWatchPageChannel(doc),
+		addedAt: now,
+	};
+	const currentTime = readMainVideoCurrentTime(doc);
+	if (currentTime > 0) payload.resumeAt = currentTime;
+	return payload;
 }
 
 function channelHandleFromPath(pathname?: string): string | null {

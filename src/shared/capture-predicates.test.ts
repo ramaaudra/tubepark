@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
 import { describe, it, expect } from "vitest";
 import {
+	buildWatchPagePayload,
 	computeButtonPosition,
 	cleanYouTubeTitle,
 	extractYouTubeVideoId,
@@ -398,6 +399,115 @@ describe("Capture Predicates", () => {
 				configurable: true,
 			});
 			expect(readMainVideoCurrentTime(document)).toBe(300);
+		});
+	});
+
+	// F10: watch-page "park & close" builds a ParkedVideo straight from the
+	// watch-page URL + DOM (no GET_TAB_META round-trip — the content script IS
+	// the reader). Pure helper so the capture seam is unit-testable without a
+	// browser; the content-script class is thin wiring over it.
+	describe("buildWatchPagePayload", () => {
+		/** Minimal watch-page doc shape: a controllable `title` + a linkedom body
+		 * so resolveWatchPageChannel + readMainVideoCurrentTime run against real
+		 * DOM. `currentTime` is defined on the <video> the way the live player
+		 * would expose it (Object.defineProperty — see readMainVideoCurrentTime
+		 * tests above). */
+		function watchDoc({
+			title,
+			channel,
+			currentTime,
+		}: {
+			title: string;
+			channel?: string;
+			currentTime?: number;
+		}) {
+			const channelHtml = channel
+				? `<div id="owner"><ytd-channel-name><a>${channel}</a></ytd-channel-name></div>`
+				: "";
+			const videoHtml = currentTime != null ? `<video id="v"></video>` : "";
+			const { document } = parseHTML(`<body>${channelHtml}${videoHtml}</body>`);
+			if (currentTime != null) {
+				const v = document.querySelector("video") as HTMLVideoElement;
+				Object.defineProperty(v, "currentTime", { value: currentTime, configurable: true });
+				Object.defineProperty(v, "clientWidth", { value: 640, configurable: true });
+				Object.defineProperty(v, "clientHeight", { value: 360, configurable: true });
+			}
+			return {
+				title,
+				querySelector: (s: string) => document.querySelector(s),
+				querySelectorAll: (s: string) => document.querySelectorAll(s),
+			};
+		}
+
+		it("returns null for a non-watch URL (home feed)", () => {
+			const doc = watchDoc({ title: "YouTube" });
+			expect(
+				buildWatchPagePayload("https://www.youtube.com/feed/subscriptions", doc, 1000),
+			).toBeNull();
+		});
+
+		it("builds a payload for /watch?v= with cleaned title + channel, no resumeAt when not mid-watch", () => {
+			const doc = watchDoc({ title: "My Video - YouTube", channel: "MKBHD" });
+			expect(
+				buildWatchPagePayload("https://www.youtube.com/watch?v=dQw4w9WgXcQ", doc, 1000),
+			).toEqual({
+				id: "dQw4w9WgXcQ",
+				title: "My Video",
+				channel: "MKBHD",
+				addedAt: 1000,
+			});
+		});
+
+		it("builds a payload for /shorts/{id}", () => {
+			const doc = watchDoc({ title: "A Short - YouTube", channel: "ShortsChannel" });
+			expect(
+				buildWatchPagePayload("https://www.youtube.com/shorts/abc123_XYZ8", doc, 2000),
+			).toEqual({
+				id: "abc123_XYZ8",
+				title: "A Short",
+				channel: "ShortsChannel",
+				addedAt: 2000,
+			});
+		});
+
+		it("includes resumeAt (floored) when mid-watch (currentTime > 0)", () => {
+			const doc = watchDoc({ title: "Mid Watch - YouTube", channel: "MKBHD", currentTime: 91.7 });
+			const payload = buildWatchPagePayload(
+				"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+				doc,
+				3000,
+			);
+			expect(payload?.resumeAt).toBe(91);
+		});
+
+		it("omits resumeAt when currentTime is 0 (F4: never store t=0)", () => {
+			const doc = watchDoc({ title: "Start - YouTube", channel: "MKBHD", currentTime: 0 });
+			const payload = buildWatchPagePayload(
+				"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+				doc,
+				3000,
+			);
+			expect(payload?.resumeAt).toBeUndefined();
+		});
+
+		it("falls back title to 'YouTube Video' when the document title is empty", () => {
+			const doc = watchDoc({ title: "", channel: "MKBHD" });
+			const payload = buildWatchPagePayload(
+				"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+				doc,
+				1000,
+			);
+			expect(payload?.title).toBe("YouTube Video");
+		});
+
+		it("falls back channel to 'YouTube' when no channel node is present", () => {
+			const doc = watchDoc({ title: "Some Video - YouTube" });
+			const payload = buildWatchPagePayload(
+				"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+				doc,
+				1000,
+			);
+			expect(payload?.channel).toBe("YouTube");
 		});
 	});
 });
