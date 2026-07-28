@@ -32,4 +32,7 @@ export default defineConfig({
 	dev: {
 		reloadCommand: "Ctrl+R",
 	},
+	webExt: {
+		startUrls: ["https://www.youtube.com/@bridgemindai/videos"],
+	},
 });
