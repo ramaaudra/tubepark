@@ -322,7 +322,7 @@ export function removeVideo(id: string): Promise<QueueState> {
 }
 
 /** Immediate bulk delete (no grace period). Kept for callers that want a
- * commit-now bulk; the panel's "Hapus Semua" now uses `requestRemoval` (grace). */
+ * commit-now bulk; the panel's "Remove all" now uses `requestRemoval` (grace). */
 export function removeManyVideos(ids: string[]): Promise<QueueState> {
 	return send(
 		{ type: MSG.REMOVE_NOW, ids },
@@ -332,7 +332,7 @@ export function removeManyVideos(ids: string[]): Promise<QueueState> {
 }
 
 /** Start a grace-period removal for 1 or N videos (Side Panel delete + bulk
- * "Hapus Semua"). The background commits any previous pending slot first, then
+ * "Remove all"). The background commits any previous pending slot first, then
  * holds this one for 5s. Undo = `cancelRemoval`. Responds with the display
  * QueueState (pending items already hidden). */
 export function requestRemoval(videos: ParkedVideo[]): Promise<QueueState> {

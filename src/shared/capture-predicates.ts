@@ -194,7 +194,7 @@ const WATCH_PAGE_CHANNEL_SELECTORS = [
 
 /**
  * Read the channel name from a YouTube watch page document. Returns the
- * product fallback `'YouTube'` (F9-3 "tak dikenal" bucket) when no selector
+ * product fallback `'YouTube'` (F9-3 "Unknown channel" bucket) when no selector
  * matches — park still succeeds; only grouping/placeholder quality degrades.
  */
 export function resolveWatchPageChannel(doc: {

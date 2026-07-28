@@ -16,7 +16,7 @@
 
 <div
 	class="park-meter"
-	title="{count} dari {max} slot terpakai"
+	title="{count} of {max} slots used"
 	data-status={status}
 >
 	<div class="meter-track">

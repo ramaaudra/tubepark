@@ -13,11 +13,11 @@ TubePark is a **Frictionless Visual Scratchpad** for YouTube: it converts a hori
 ### Entities
 - **Parked Video**: A minimal metadata record (id, title, channel, addedAt, optional pinned, optional resumeAt) captured from a YouTube tab/link. It is a *Queue* item, NOT a history/log entry. `resumeAt` (seconds) is set only when parking a mid-watch tab; hover/context-menu park leave it undefined.
 - **TubePark Queue**: The active, temporary to-watch list stored in `chrome.storage.local` under `tubepark_queue`. No archive.
-- **Collection**: An optional, exactly-one-per-video user label that acts as a lens over the Queue. It is not a container: items remain Queue members, pinning stays orthogonal, and “Semua” always sees the whole Queue. Collections are derived from item labels rather than stored as separate entities.
+- **Collection**: An optional, exactly-one-per-video user label that acts as a lens over the Queue. It is not a container: items remain Queue members, pinning stays orthogonal, and “All” always sees the whole Queue. Collections are derived from item labels rather than stored as separate entities.
 
 > Originally specified as a *pure* queue whose only organizing axis was recency. ADR-0005 (2026-07-26) amends this to permit user-controlled organization — collections/tags, alternative groupings, manual ordering, search — while keeping "no archive, no history, no `watched` flag" binding and keeping Park itself a zero-decision action. That ADR fixed the direction; Collection now means an optional exactly-one label, while grouping and pinned ordering remain orthogonal views over the Queue.
 
-> Auto-expire (a `Settings` entity, `chrome.alarms` sweep, `autoExpireDays`) was designed in ADR-0002 but never implemented — see that ADR's Superseded note. There is currently no time-based auto-removal; `Lebih Lama` (age > 7 days) is a Side Panel display grouping only, with a manual "Hapus Semua" bulk-remove action, not automatic deletion.
+> Auto-expire (a `Settings` entity, `chrome.alarms` sweep, `autoExpireDays`) was designed in ADR-0002 but never implemented — see that ADR's Superseded note. There is currently no time-based auto-removal; `Older` (age > 7 days) is a Side Panel display grouping only, with a manual "Remove all" bulk-remove action, not automatic deletion.
 
 ### Thumbnail Strategy
 - Thumbnails are NEVER stored (no Base64) — resolved dynamically via `https://img.youtube.com/vi/{id}/mqdefault.jpg`.
@@ -27,7 +27,7 @@ TubePark is a **Frictionless Visual Scratchpad** for YouTube: it converts a hori
 ### Lifecycle (Parked Video)
 `Created (Parked)` → `Stored` → `Removed (explicit, manual)`
 
-A Parked Video is removed from storage entirely only via explicit user action in the Popup or Side Panel (single remove, or the bulk "Hapus Semua" on `Lebih Lama`). There is no automatic deletion on watch-completion or on age — YouTube SPA makes completion detection unreliable (skip/retab/close), and auto-expire (see above) was never built. Deliberately NO `watched` flag, NO history collection (recreates YouTube native History = redundant + bloat).
+A Parked Video is removed from storage entirely only via explicit user action in the Popup or Side Panel (single remove, or the bulk "Remove all" on `Older`). There is no automatic deletion on watch-completion or on age — YouTube SPA makes completion detection unreliable (skip/retab/close), and auto-expire (see above) was never built. Deliberately NO `watched` flag, NO history collection (recreates YouTube native History = redundant + bloat).
 
 A Parked Video MAY carry a `pinned` flag (per-item, multi-allowed). Pinned items are sticky-sorted into the Side Panel's `Up Next` group with an accent border/background and a filled pin icon. Multiple concurrent pinned items are valid.
 
@@ -60,6 +60,6 @@ A removal in the Side Panel is a **grace-period request**, not an immediate comm
 ### Capture Mechanisms
 - **Context Menu Capture**: Right-click a YouTube video **link** on a YouTube page → "Park This Video". Scoped via `contexts: ["link"]` + `targetUrlPatterns` (watch / youtu.be / shorts) on the link URL **and** `documentUrlPatterns: ["*://*.youtube.com/*"]` on the page URL, so the menu only appears where a content script is loaded and can actually park — never on blank space, never on YouTube links in other sites (silent-fail closure). See ADR-0001 (+ its G3 Correction). Card-miss fallback reads channel via `resolveWatchPageChannel()` (same as tab-park).
 - **Hover-to-Park Capture**: A single floating button, portaled to `<body>` and positioned via `elementsFromPoint`, tracks whichever video card the pointer is over (primary driver, MVP). Geometry-based tracking survives YouTube's hover-preview portal, which breaks a naive CSS `:hover` approach — see `src/entrypoints/content.ts`.
-- **Tab-Park Capture** (popup current/all): content script `GET_TAB_META` returns `{ channel, currentTime }` from the watch-page DOM — no network, no new permissions. Channel fallback is `'YouTube'` (F9-3 "tak dikenal"). `currentTime > 0` becomes `resumeAt`; play builds `?v=ID&t=N` via `openVideo(id, resumeAt)`.
+- **Tab-Park Capture** (popup current/all): content script `GET_TAB_META` returns `{ channel, currentTime }` from the watch-page DOM — no network, no new permissions. Channel fallback is `'YouTube'` (F9-3 "Unknown channel"). `currentTime > 0` becomes `resumeAt`; play builds `?v=ID&t=N` via `openVideo(id, resumeAt)`.
 
-> There is no keyboard shortcut. An early design had "hover + `P`" as the primary driver (still described that way in ADR-0001); it was replaced by the floating button and never implemented. Popup and Side Panel copy still advertises `P` — tracked as G1 in `docs/ROADMAP.md`.
+> There is no keyboard shortcut. An early design had "hover + `P`" as the primary driver (still described that way in ADR-0001); it was replaced by the floating button and never implemented. The stale `P` copy has since been removed from the Popup and Side Panel (G1 in `docs/ROADMAP.md`).

@@ -17,7 +17,7 @@ import type { ParkedVideo } from "./types";
  */
 
 /** One pending removal slot. Always a list — 1 item for a single delete, N for
- * bulk "Hapus Semua". A single code path means the single/bulk undo bug (#1)
+ * bulk "Remove all". A single code path means the single/bulk undo bug (#1)
  * cannot exist structurally (D6). */
 export interface PendingRemoval {
 	videos: ParkedVideo[];
@@ -90,7 +90,7 @@ export function visibleQueue(
 }
 
 /** How many items the current pending slot hides. Drives the honest toast count
- * (G6 absorbed): `1 ? 'Video dihapus' : '{n} video dihapus'`. */
+ * (G6 absorbed): `1 ? 'Video removed' : '{n} videos removed'`. */
 export function pendingCount(state: PendingRemovalState): number {
 	return state ? state.videos.length : 0;
 }

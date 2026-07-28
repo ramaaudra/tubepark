@@ -4,7 +4,7 @@
 Accepted (2026-07-26) — direction only. The concrete mechanism (term, data shape, UI) is deliberately left open; see "Deferred to design" below. No code has been written against this ADR yet.
 
 ## Context
-`CONTEXT.md` framed the TubePark Queue as a **pure queue — no archive**, with exactly one organizing axis: recency, expressed as the Side Panel's `Up Next` / `Baru` / `Lebih Lama` grouping, plus a binary `pinned` flag. That was the right MVP shape: it kept the storage record at four fields, kept the reducers pure, and avoided rebuilding a bookmark manager.
+`CONTEXT.md` framed the TubePark Queue as a **pure queue — no archive**, with exactly one organizing axis: recency, expressed as the Side Panel's `Up next` / `Recent` / `Older` grouping, plus a binary `pinned` flag. That was the right MVP shape: it kept the storage record at four fields, kept the reducers pure, and avoided rebuilding a bookmark manager.
 
 Two pressures have surfaced against it.
 

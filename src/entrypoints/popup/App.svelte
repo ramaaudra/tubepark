@@ -193,7 +193,7 @@
   );
 
   const upNextCount = $derived(queue.filter((v) => v.pinned).length);
-  const baruCount = $derived(queue.filter((v) => !v.pinned).length);
+  const recentCount = $derived(queue.filter((v) => !v.pinned).length);
 
   const nowPlayingTitle = $derived(
     nowPlaying ? (queue.find((v) => v.id === nowPlaying?.videoId)?.title ?? nowPlaying.videoId) : ''
@@ -214,9 +214,9 @@
       <Icon name="warning" size={16} />
       <span>
         {#if capacity.status === 'full'}
-          Queue penuh! Tonton atau hapus video dulu.
+          Queue full ({capacity.count}/{capacity.max})
         {:else}
-          Queue hampir penuh ({capacity.count}/{capacity.max})
+          Queue almost full ({capacity.count}/{capacity.max})
         {/if}
       </span>
     </div>
@@ -225,14 +225,14 @@
   <section class="actions">
     <div class="tab-info">
       <Icon name="monitorPlay" size={15} />
-      <span>{openWatchTabCount} tab video YouTube terbuka</span>
+      <span>{openWatchTabCount} YouTube video tab{openWatchTabCount === 1 ? '' : 's'} open</span>
     </div>
 
     <div class="buttons">
       {#if currentTabIsWatch}
         <button class="btn btn-primary" bind:this={parkBtnEl} onclick={handleParkCurrentTab}>
           <ParkBadge size={16} />
-          Park Tab Ini & Tutup
+          Park this tab & close
         </button>
       {/if}
 
@@ -243,7 +243,7 @@
         disabled={openWatchTabCount === 0}
       >
         <Icon name="queue" size={15} />
-        Park Semua Tab YT
+        Park all YouTube tabs
       </button>
     </div>
   </section>
@@ -252,7 +252,7 @@
     <section class="now-playing">
       <Equalizer />
       <div class="np-text">
-        <span class="np-label">Now Playing</span>
+        <span class="np-label">Now playing</span>
         <span class="np-title">{nowPlayingTitle}</span>
       </div>
     </section>
@@ -261,20 +261,20 @@
   <section class="queue">
     <div class="queue-head" bind:this={listAnchorEl}>
       <div class="counts">
-        <span class="count-chip"><Icon name="pin" size={12} />{upNextCount} Up Next</span>
-        <span class="count-chip"><Icon name="clock" size={12} />{baruCount} Baru</span>
+        <span class="count-chip"><Icon name="pin" size={12} />{upNextCount} Up next</span>
+        <span class="count-chip"><Icon name="clock" size={12} />{recentCount} Recent</span>
       </div>
       <button class="btn-link" onclick={handleOpenSidePanel}>
         <Icon name="sidebar" size={14} />
-        Side Panel
+        Side panel
       </button>
     </div>
 
     {#if recentItems.length === 0}
       <div class="empty">
         <ParkBadge size={30} />
-        <p>Belum ada video di-park</p>
-        <span class="empty-sub">Hover video di YouTube, tekan <kbd>P</kbd></span>
+        <p>No videos parked yet</p>
+        <span class="empty-sub">Hover a video on YouTube and click the park button</span>
       </div>
     {:else}
       <ul class="recent">
@@ -285,14 +285,14 @@
             out:parkOut={{ reduced }}
             animate:flip={{ duration: reduced ? 150 : 300 }}
           >
-            <button class="thumb" onclick={() => handlePlay(video)} aria-label="Putar {video.title}">
+            <button class="thumb" onclick={() => handlePlay(video)} aria-label="Play {video.title}">
               <Thumbnail videoId={video.id} channel={video.channel} />
             </button>
             <div class="card-body">
               <span class="card-title">{video.title}</span>
               <span class="card-meta">{video.channel}</span>
             </div>
-            <button class="icon-btn danger" title="Hapus" onclick={() => handleRemove(video)}>
+            <button class="icon-btn danger" title="Remove" onclick={() => handleRemove(video)}>
               <Icon name="x" size={16} />
             </button>
           </li>
@@ -302,7 +302,7 @@
   </section>
 
   {#if pendingCount > 0}
-    <div class="undo-toast"><span>Video dihapus</span><button onclick={handleUndo}>Undo</button></div>
+    <div class="undo-toast"><span>Video removed</span><button onclick={handleUndo}>Undo</button></div>
   {/if}
 </main>
 
@@ -528,17 +528,6 @@
 
   .empty-sub {
     font-size: 11px;
-  }
-
-  kbd {
-    font-family: inherit;
-    font-size: 10px;
-    font-weight: 700;
-    background: var(--tp-surface-2);
-    border: 1px solid var(--tp-border);
-    border-radius: 4px;
-    padding: 1px 5px;
-    color: var(--tp-text-2);
   }
 
   .recent {

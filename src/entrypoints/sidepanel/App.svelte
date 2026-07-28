@@ -258,10 +258,10 @@
 <main>
   <header><div class="brand"><ParkBadge size={30}/><h1>TubePark</h1></div><ParkMeter count={capacity.count} max={capacity.max} status={capacity.status}/></header>
   <section class="controls">
-    <input aria-label="Cari video" placeholder="Cari judul atau channel…" bind:value={query}/>
+    <input aria-label="Search videos" placeholder="Search title or channel…" bind:value={query}/>
 
     <div class="toolbar-row">
-      <div class="tabs-wrap" role="tablist" aria-label="Collection">
+      <div class="tabs-wrap" role="tablist" aria-label="Collections">
         <button
           type="button"
           role="tab"
@@ -270,7 +270,7 @@
           aria-selected={!activeCollection}
           onclick={() => void chooseCollection(null)}
         >
-          Semua <span class="count">{queue.length}</span>
+          All <span class="count">{queue.length}</span>
         </button>
         <div class="tabs-scroll" bind:this={tabsScrollEl}>
           {#each namedCollections as item (item.name)}
@@ -282,7 +282,7 @@
               {#if renaming && activeCollection === item.name}
                 <input
                   class="rename-input"
-                  aria-label="Ubah nama collection"
+                  aria-label="Rename collection"
                   bind:this={renameInput}
                   bind:value={renameValue}
                   onkeydown={(e) => {
@@ -307,8 +307,8 @@
                     type="button"
                     class="tab-more"
                     data-tab-menu-btn
-                    aria-label="Menu collection"
-                    title="Menu collection"
+                    aria-label="Collection menu"
+                    title="Collection menu"
                     aria-expanded={menuOpen}
                     aria-haspopup="menu"
                     onclick={toggleTabMenu}
@@ -321,11 +321,11 @@
       </div>
 
       <div class="toolbar-end">
-        <div class="seg" role="group" aria-label="Tampilan">
-          <button type="button" class:active={grouping === 'time'} onclick={() => void chooseGrouping('time')}>Terbaru</button>
+        <div class="seg" role="group" aria-label="Group by">
+          <button type="button" class:active={grouping === 'time'} onclick={() => void chooseGrouping('time')}>Time</button>
           <button type="button" class:active={grouping === 'channel'} onclick={() => void chooseGrouping('channel')}>Channel</button>
         </div>
-        <button type="button" class="pick-btn" onclick={toggleSelecting}>{selecting ? 'Batal' : 'Pilih'}</button>
+        <button type="button" class="pick-btn" onclick={toggleSelecting}>{selecting ? 'Cancel' : 'Select'}</button>
       </div>
     </div>
 
@@ -338,7 +338,7 @@
         style:top="{menuPos.top}px"
         style:left="{menuPos.left}px"
       >
-        <button type="button" role="menuitem" onclick={() => void startRename()}>Ubah nama</button>
+        <button type="button" role="menuitem" onclick={() => void startRename()}>Rename</button>
       </div>
     {/if}
 
@@ -350,23 +350,23 @@
           disabled={selected.length === 0}
           onclick={() => { assigning = !assigning; }}
         >
-          Masukkan ke Collection ({selected.length})
+          Add to collection ({selected.length})
         </button>
         {#if assigning && selected.length > 0}
-          <div class="picker" role="listbox" aria-label="Pilih collection">
+          <div class="picker" role="listbox" aria-label="Select collection">
             {#each namedCollections as item (item.name)}
               <button type="button" role="option" onclick={() => void assignTo(item.name)}>{item.name}</button>
             {/each}
             <form class="new-row" onsubmit={(e) => { e.preventDefault(); void createAndAssign(); }}>
               <input
-                aria-label="Collection baru"
-                placeholder="Collection baru…"
+                aria-label="New collection"
+                placeholder="New collection…"
                 bind:value={newCollectionName}
               />
-              <button type="submit" disabled={!newCollectionName.trim()}>Buat</button>
+              <button type="submit" disabled={!newCollectionName.trim()}>Create</button>
             </form>
             {#if selectedHaveCollection}
-              <button type="button" class="clear-assign" onclick={() => void assignTo('')}>Hapus dari collection</button>
+              <button type="button" class="clear-assign" onclick={() => void assignTo('')}>Remove from collection</button>
             {/if}
           </div>
         {/if}
@@ -374,12 +374,12 @@
     {/if}
   </section>
   <div class="content">
-    {#if filtered.length === 0}<div class="empty"><ParkBadge size={44}/><h3>Tidak ada video</h3><p>{query ? 'Coba pencarian lain.' : 'Park video dari YouTube untuk memulai.'}</p></div>{/if}
+    {#if filtered.length === 0}<div class="empty"><ParkBadge size={44}/><h3>{query ? 'No results' : 'No videos parked yet'}</h3><p>{query ? 'Try a different search.' : 'Park a video on YouTube to get started.'}</p></div>{/if}
     {#if capacity.status === 'warning' || capacity.status === 'full'}
-      <div class="banner" class:banner-full={capacity.status === 'full'}><Icon name="warning" size={16}/>{capacity.status === 'full' ? `Queue penuh (${capacity.count}/${capacity.max})!` : `Queue hampir penuh (${capacity.count}/${capacity.max})`}</div>
+      <div class="banner" class:banner-full={capacity.status === 'full'}><Icon name="warning" size={16}/>{capacity.status === 'full' ? `Queue full (${capacity.count}/${capacity.max})` : `Queue almost full (${capacity.count}/${capacity.max})`}</div>
     {/if}
     {#each grouped as group}
-      <section class:unknown={group.kind === 'unknown'}><h2>{group.label} <span>{group.items.length}</span>{#if group.kind === 'older'}<button class="bulk-btn" onclick={() => removeGroup(group.items)}>Hapus Semua</button>{/if}</h2>
+      <section class:unknown={group.kind === 'unknown'}><h2>{group.label} <span>{group.items.length}</span>{#if group.kind === 'older'}<button class="bulk-btn" onclick={() => removeGroup(group.items)}>Remove all</button>{/if}</h2>
         {#each group.items as video (video.id)}
           {@const isSelected = selected.includes(video.id)}
           <article
@@ -398,21 +398,21 @@
                 <input
                   type="checkbox"
                   checked={isSelected}
-                  aria-label="Pilih {video.title}"
+                  aria-label="Select {video.title}"
                   onchange={(e) => selected = e.currentTarget.checked ? [...selected, video.id] : selected.filter((id) => id !== video.id)}
                 />
                 <span class="check-mark" aria-hidden="true"></span>
               </label>
             {/if}
-            {#if video.pinned}<button class="grip" draggable="true" aria-label="Seret untuk mengurutkan {video.title}" title="Seret untuk urutkan" ondragstart={() => draggedId = video.id}><Icon name="grip" size={16}/></button>{/if}
+            {#if video.pinned}<button class="grip" draggable="true" aria-label="Reorder {video.title}" title="Drag to reorder" ondragstart={() => draggedId = video.id}><Icon name="grip" size={16}/></button>{/if}
             <button class="thumb" onclick={() => selecting ? (selected = isSelected ? selected.filter((id) => id !== video.id) : [...selected, video.id]) : tabOps.openVideo(video.id, video.resumeAt)}><Thumbnail videoId={video.id} channel={video.channel}/></button>
-            <div class="body"><strong>{video.title}</strong><small>{#if nowPlaying?.videoId === video.id}<Equalizer />{/if}{video.channel} · {formatAgeBadge(video)}{#if video.durationSec !== undefined} · {formatDuration(video.durationSec)}{/if}</small><div class="actions"><button type="button" aria-label="Putar {video.title}" title="Putar" onclick={() => tabOps.openVideo(video.id, video.resumeAt)}><Icon name="play" size={14}/></button><button type="button" aria-label={video.pinned ? `Unpin ${video.title}` : `Pin ${video.title}`} title={video.pinned ? 'Unpin' : 'Pin'} onclick={async () => applyState(await togglePinned(video.id))}><Icon name={video.pinned ? 'pinFill' : 'pin'} size={14}/></button><button type="button" aria-label="Hapus {video.title}" title="Hapus" onclick={() => remove(video)}><Icon name="x" size={14}/></button></div></div>
+            <div class="body"><strong>{video.title}</strong><small>{#if nowPlaying?.videoId === video.id}<Equalizer />{/if}{video.channel} · {formatAgeBadge(video)}{#if video.durationSec !== undefined} · {formatDuration(video.durationSec)}{/if}</small><div class="actions"><button type="button" aria-label="Play {video.title}" title="Play" onclick={() => tabOps.openVideo(video.id, video.resumeAt)}><Icon name="play" size={14}/></button><button type="button" aria-label={video.pinned ? `Unpin ${video.title}` : `Pin ${video.title}`} title={video.pinned ? 'Unpin' : 'Pin'} onclick={async () => applyState(await togglePinned(video.id))}><Icon name={video.pinned ? 'pinFill' : 'pin'} size={14}/></button><button type="button" aria-label="Remove {video.title}" title="Remove" onclick={() => remove(video)}><Icon name="x" size={14}/></button></div></div>
           </article>
         {/each}
       </section>
     {/each}
   </div>
-  {#if pendingCount}<div class="toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300 }}><span>{pendingCount > 1 ? `${pendingCount} video dihapus` : 'Video dihapus'}</span><button onclick={undo}>Undo</button></div>{/if}
+  {#if pendingCount}<div class="toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300 }}><span>{pendingCount > 1 ? `${pendingCount} videos removed` : 'Video removed'}</span><button onclick={undo}>Undo</button></div>{/if}
 </main>
 
 <style>

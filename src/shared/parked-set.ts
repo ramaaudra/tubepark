@@ -16,5 +16,5 @@ export function withoutPendingIds(
 }
 
 export function parkToastMessage(title: string, collection?: string | null): string {
-	return collection ? `Diparkir ke ${collection}` : `Diparkir: "${title}"`;
+	return collection ? `Parked to ${collection}` : `Parked: "${title}"`;
 }

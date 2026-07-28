@@ -154,7 +154,7 @@ export default defineBackground(() => {
 			if (chrome.contextMenus) {
 				chrome.contextMenus.create({
 					id: CONTEXT_MENU_ID,
-					title: "Park This Video",
+					title: "Park this video",
 					contexts: ["link"],
 					// G3: targetUrlPatterns filters the right-clicked LINK's URL.
 					// /watch* is the primary path; youtu.be/* and /shorts* are

@@ -15,7 +15,7 @@ describe("parked content-script state", () => {
 	});
 
 	it("names an auto-assigned collection in the park toast", () => {
-		expect(parkToastMessage("Video", "Belajar")).toBe("Diparkir ke Belajar");
-		expect(parkToastMessage("Video", null)).toBe('Diparkir: "Video"');
+		expect(parkToastMessage("Video", "Belajar")).toBe("Parked to Belajar");
+		expect(parkToastMessage("Video", null)).toBe('Parked: "Video"');
 	});
 });

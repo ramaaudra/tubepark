@@ -217,7 +217,7 @@ class FloatingParkButton {
 			this.renderState();
 			chrome.runtime.sendMessage(
 				{ type: MSG.PENDING_REMOVE, ids: [meta.videoId] },
-				() => showToast("Dihapus", "success", () => {
+				() => showToast("Removed", "success", () => {
 					chrome.runtime.sendMessage({ type: MSG.CANCEL_REMOVE }, () => void this.syncParkedIds());
 				}),
 			);
@@ -242,10 +242,10 @@ class FloatingParkButton {
 					showToast(parkToastMessage(meta.title, result.collection), "success");
 				} else if (result?.duplicate) {
 					this.flash("pinFill");
-					showToast(`Sudah ada di queue: "${meta.title}"`, "duplicate");
+					showToast(`Already in queue: "${meta.title}"`, "duplicate");
 				} else if (result?.full) {
 					this.flash("warning");
-					showToast("Queue penuh (200/200)! Hapus video lama dulu.", "full");
+					showToast("Queue full (200/200) — remove old videos first.", "full");
 				} else {
 					this.btn.innerHTML = svgMarkup("pin");
 				}
@@ -415,10 +415,10 @@ export default defineContentScript({
 							if (result?.success) {
 								showToast(parkToastMessage(meta!.title, result.collection), "success");
 							} else if (result?.duplicate) {
-								showToast(`Sudah ada di queue: "${meta!.title}"`, "duplicate");
+								showToast(`Already in queue: "${meta!.title}"`, "duplicate");
 							} else if (result?.full) {
 								showToast(
-									"Queue penuh (200/200)! Hapus video lama dulu.",
+									"Queue full (200/200) — remove old videos first.",
 									"full",
 								);
 							}
