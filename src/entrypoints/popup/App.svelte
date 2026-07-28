@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { flip } from 'svelte/animate';
   import { getQueueState, parkVideo, requestRemoval, cancelRemoval, type QueueState } from '../../shared/storage';
-  import { extractYouTubeVideoId } from '../../shared/capture-predicates';
+  import { extractYouTubeVideoId, cleanYouTubeTitle } from '../../shared/capture-predicates';
   import { MSG, type TabMeta } from '../../shared/messages';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import Thumbnail from '../../components/Thumbnail.svelte';
@@ -51,7 +51,7 @@
   ): ParkedVideo {
     const payload: ParkedVideo = {
       id: videoId,
-      title: (tabTitle || 'YouTube Video').replace('- YouTube', '').trim(),
+      title: cleanYouTubeTitle(tabTitle || 'YouTube Video'),
       channel: meta.channel,
       addedAt: Date.now(),
     };
@@ -195,8 +195,19 @@
   const upNextCount = $derived(queue.filter((v) => v.pinned).length);
   const recentCount = $derived(queue.filter((v) => !v.pinned).length);
 
+  /** Pick a display title for the now-playing tab. The live tab title wins;
+   * when it's missing or the generic `YouTube` (tab still loading), fall back
+   * to the parked entry's title (covers the park -> reopen-from-popup
+   * navigation gap, since the queue is already in hand), then a neutral label.
+   * Never the raw videoId. */
+  function resolveNowPlayingTitle(tab: NowPlayingTab, parked: ParkedVideo[]): string {
+    const fromTab = tab.title && tab.title !== 'YouTube' ? tab.title : '';
+    const fromQueue = parked.find((v) => v.id === tab.videoId)?.title ?? '';
+    return fromTab || fromQueue || 'YouTube video';
+  }
+
   const nowPlayingTitle = $derived(
-    nowPlaying ? (queue.find((v) => v.id === nowPlaying?.videoId)?.title ?? nowPlaying.videoId) : ''
+    nowPlaying ? resolveNowPlayingTitle(nowPlaying, queue) : ''
   );
 </script>
 

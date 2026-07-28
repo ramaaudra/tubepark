@@ -1,6 +1,7 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 import {
 	type CardMeta,
+	cleanYouTubeTitle,
 	computeButtonPosition,
 	extractYouTubeVideoId,
 	readMainVideoCurrentTime,
@@ -394,9 +395,7 @@ export default defineContentScript({
 						// when available (G4). Falls back to 'YouTube' off-watch pages.
 						meta = {
 							videoId: message.videoId,
-							title:
-								document.title.replace("- YouTube", "").trim() ||
-								"YouTube Video",
+							title: cleanYouTubeTitle(document.title) || "YouTube Video",
 							channel: resolveWatchPageChannel(document),
 						};
 					}

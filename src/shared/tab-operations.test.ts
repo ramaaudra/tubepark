@@ -94,9 +94,9 @@ describe("TestTabOperations", () => {
 
 	it("records getNowPlayingTab call", async () => {
 		const ops = new TestTabOperations();
-		ops.nowPlayingTab = { id: 5, videoId: "abc", windowId: 1 };
+		ops.nowPlayingTab = { id: 5, videoId: "abc", windowId: 1, title: "Test Video" };
 		const result = await ops.getNowPlayingTab();
-		expect(result).toEqual({ id: 5, videoId: "abc", windowId: 1 });
+		expect(result).toEqual({ id: 5, videoId: "abc", windowId: 1, title: "Test Video" });
 		expect(ops.calls).toContainEqual({ method: "getNowPlayingTab", args: [] });
 	});
 
@@ -341,6 +341,7 @@ describe("RealTabOperations", () => {
 					url: "https://youtube.com/watch?v=abc123",
 					active: true,
 					windowId: 2,
+					title: "My Video - YouTube",
 				},
 			]);
 
@@ -351,6 +352,29 @@ describe("RealTabOperations", () => {
 				id: 7,
 				videoId: "abc123",
 				windowId: 2,
+				title: "My Video",
+			});
+		});
+
+		it("uses empty title when the tab has no title", async () => {
+			const chrome = fakeChrome();
+			chrome.tabs.query.mockResolvedValue([
+				{
+					id: 9,
+					url: "https://youtube.com/watch?v=xyz",
+					active: true,
+					windowId: 3,
+				},
+			]);
+
+			const ops = new RealTabOperations(chrome as any);
+			const result = await ops.getNowPlayingTab();
+
+			expect(result).toEqual({
+				id: 9,
+				videoId: "xyz",
+				windowId: 3,
+				title: "",
 			});
 		});
 

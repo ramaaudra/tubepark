@@ -1,4 +1,4 @@
-import { extractYouTubeVideoId } from "./capture-predicates";
+import { cleanYouTubeTitle, extractYouTubeVideoId } from "./capture-predicates";
 
 export interface SimpleTab {
 	id?: number;
@@ -12,6 +12,11 @@ export interface NowPlayingTab {
 	id: number;
 	videoId: string;
 	windowId: number;
+	/** Video title from the browser tab title (`<title> - YouTube`), cleaned via
+	 * cleanYouTubeTitle. "" when the tab is still loading / has no title. The
+	 * popup falls back to the parked-queue title then a neutral label — never
+	 * the raw videoId. */
+	title: string;
 }
 
 /** Build a YouTube watch URL, optionally with a resume timestamp (F4).
@@ -96,6 +101,7 @@ export class RealTabOperations implements TabOperations {
 			id: ytTab.id,
 			videoId: extractYouTubeVideoId(ytTab.url!)!,
 			windowId: ytTab.windowId,
+			title: cleanYouTubeTitle(ytTab.title),
 		};
 	}
 

@@ -4,6 +4,7 @@ import { parseHTML } from "linkedom";
 import { describe, it, expect } from "vitest";
 import {
 	computeButtonPosition,
+	cleanYouTubeTitle,
 	extractYouTubeVideoId,
 	isYouTubeWatchUrl,
 	isMatchingVideoCardSelector,
@@ -109,6 +110,22 @@ describe("Capture Predicates", () => {
 
 		it("returns false for non-YouTube URLs", () => {
 			expect(isYouTubeWatchUrl("https://google.com")).toBe(false);
+		});
+	});
+
+	describe("cleanYouTubeTitle", () => {
+		it("strips the ' - YouTube' suffix and trims", () => {
+			expect(cleanYouTubeTitle("My Video - YouTube")).toBe("My Video");
+		});
+
+		it("returns the title unchanged when there is no suffix", () => {
+			expect(cleanYouTubeTitle("Just a title")).toBe("Just a title");
+		});
+
+		it("returns empty string for empty / undefined / null", () => {
+			expect(cleanYouTubeTitle("")).toBe("");
+			expect(cleanYouTubeTitle(undefined)).toBe("");
+			expect(cleanYouTubeTitle(null)).toBe("");
 		});
 	});
 

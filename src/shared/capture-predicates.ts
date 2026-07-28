@@ -68,6 +68,15 @@ export function isYouTubeWatchUrl(urlStr: string): boolean {
 	return extractYouTubeVideoId(urlStr) !== null;
 }
 
+/** Strip YouTube's ` - YouTube` title suffix from a browser tab / document
+ * title and trim whitespace. Pure string transform — returns "" for empty
+ * input, never throws. Used by the now-playing display, park-from-tab, and
+ * the content-script context-menu fallback so the strip rule lives in one
+ * place (the suffix has already drifted once between call sites). */
+export function cleanYouTubeTitle(title: string | undefined | null): string {
+	return (title ?? "").replace("- YouTube", "").trim();
+}
+
 export function isMatchingVideoCardSelector(
 	tagNameOrSelector: string,
 ): boolean {
