@@ -118,6 +118,19 @@ describe("Storage Pure Functions & Capacity Logic", () => {
 			expect(collections.reduce((sum, item) => sum + item.count, 0)).toBe(queue.length);
 		});
 
+		it("orders named collections A→Z", () => {
+			const queue = [
+				{ ...sampleVideo1, collection: "Zebra" },
+				{ ...sampleVideo2, collection: "Midnight" },
+				{ ...sampleVideo1, id: "third", collection: "Alpha" },
+			];
+			expect(deriveCollections(queue).map((item) => item.name)).toEqual([
+				"Alpha",
+				"Midnight",
+				"Zebra",
+			]);
+		});
+
 		it("normalizes missing, partial, and invalid UI state", () => {
 			expect(normalizeUiState(undefined)).toEqual({ activeCollection: null, grouping: "time" });
 			expect(normalizeUiState({ activeCollection: "Belajar" })).toEqual({ activeCollection: "Belajar", grouping: "time" });

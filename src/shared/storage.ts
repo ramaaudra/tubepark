@@ -234,7 +234,7 @@ export interface CollectionCount {
 	count: number;
 }
 
-/** A complete partition of the queue by collection, including unassigned. */
+/** A complete partition of the queue by collection, including unassigned. Named collections are A→Z stable. */
 export function deriveCollections(queue: ParkedVideo[]): CollectionCount[] {
 	const counts = new Map<string, number>();
 	let unassigned = 0;
@@ -242,9 +242,16 @@ export function deriveCollections(queue: ParkedVideo[]): CollectionCount[] {
 		if (video.collection) counts.set(video.collection, (counts.get(video.collection) ?? 0) + 1);
 		else unassigned += 1;
 	}
+	const named = [...counts]
+		.map(([name, count]) => ({ name, count }))
+		.sort(
+			(a, b) =>
+				a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
+				a.name.localeCompare(b.name),
+		);
 	return [
 		...(unassigned ? [{ name: null, count: unassigned }] : []),
-		...[...counts].map(([name, count]) => ({ name, count })),
+		...named,
 	];
 }
 

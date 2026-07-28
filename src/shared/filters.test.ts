@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesDuration, matchesSearch, parseDurationSec } from "./filters";
+import { formatDuration, matchesSearch, parseDurationSec } from "./filters";
 import type { ParkedVideo } from "./types";
 
 const video: ParkedVideo = {
@@ -30,13 +30,10 @@ describe("parseDurationSec", () => {
 	});
 });
 
-describe("matchesDuration", () => {
-	it("implements short, medium, long and excludes unknown", () => {
-		expect(matchesDuration({ ...video, durationSec: 299 }, "short")).toBe(true);
-		expect(matchesDuration({ ...video, durationSec: 300 }, "medium")).toBe(true);
-		expect(matchesDuration({ ...video, durationSec: 1200 }, "medium")).toBe(true);
-		expect(matchesDuration({ ...video, durationSec: 1201 }, "long")).toBe(true);
-		expect(matchesDuration(video, "short")).toBe(false);
-		expect(matchesDuration(video, "all")).toBe(true);
+describe("formatDuration", () => {
+	it("formats minutes and hours", () => {
+		expect(formatDuration(42)).toBe("0:42");
+		expect(formatDuration(919)).toBe("15:19");
+		expect(formatDuration(3753)).toBe("1:02:33");
 	});
 });

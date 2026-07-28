@@ -1,7 +1,5 @@
 import type { ParkedVideo } from "./types";
 
-export type DurationFilter = "all" | "short" | "medium" | "long";
-
 export function matchesSearch(video: ParkedVideo, query: string): boolean {
 	const needle = query.trim().toLocaleLowerCase();
 	if (!needle) return true;
@@ -16,14 +14,6 @@ export function parseDurationSec(text: string): number | undefined {
 		return undefined;
 	}
 	return parts.reduce((total, part) => total * 60 + part, 0);
-}
-
-export function matchesDuration(video: ParkedVideo, filter: DurationFilter): boolean {
-	if (filter === "all") return true;
-	if (video.durationSec === undefined) return false;
-	if (filter === "short") return video.durationSec < 5 * 60;
-	if (filter === "medium") return video.durationSec >= 5 * 60 && video.durationSec <= 20 * 60;
-	return video.durationSec > 20 * 60;
 }
 
 export function formatDuration(seconds: number): string {
