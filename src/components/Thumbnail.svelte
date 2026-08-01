@@ -50,6 +50,8 @@
     background-color: var(--tp-surface-2);
     flex-shrink: 0;
     position: relative;
+    outline: 1px solid oklch(0 0 0 / 0.1);
+    outline-offset: -1px;
   }
 
   .thumbnail-img {
@@ -81,5 +83,11 @@
     font-weight: 700;
     color: var(--tp-text-2);
     text-transform: uppercase;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .thumbnail-wrapper {
+      outline-color: oklch(1 0 0 / 0.1);
+    }
   }
 </style>

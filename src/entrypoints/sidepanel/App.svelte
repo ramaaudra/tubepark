@@ -9,13 +9,14 @@
   import { extractYouTubeVideoId } from '../../shared/capture-predicates';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import { MSG } from '../../shared/messages';
-  import Equalizer from '../../components/equalizer.svelte';
+  import Equalizer from '../../components/Equalizer.svelte';
   import { parkIn, parkOut } from '../../components/transitions';
   import Thumbnail from '../../components/Thumbnail.svelte';
   import Icon from '../../components/Icon.svelte';
   import ParkBadge from '../../components/ParkBadge.svelte';
   import ParkMeter from '../../components/ParkMeter.svelte';
   import type { ParkedVideo, CapacityState, GroupingPreference } from '../../shared/types';
+  import { positionFloatingMenu } from '../../shared/ui-helpers';
 
   let queue = $state<ParkedVideo[]>([]);
   let capacity = $state<CapacityState>({ status: 'safe', count: 0, max: 200, percentage: 0 });
@@ -34,13 +35,26 @@
   let pendingCount = $state(0);
   let draggedId = $state<string | null>(null);
   let reduced = $state(false);
+  let loading = $state(true);
+  let loadError = $state(false);
   let hydrated = $state(false);
+  let animateItems = $state(false);
   let renameInput = $state<HTMLInputElement | null>(null);
   let tabsScrollEl = $state<HTMLElement | null>(null);
   let tabMenuEl = $state<HTMLElement | null>(null);
+  let tabMenuButtonEl = $state<HTMLButtonElement | null>(null);
+  let tabMenuItemEl = $state<HTMLButtonElement | null>(null);
 
   function applyState(state: QueueState) { queue = state.queue; capacity = state.capacity; }
-  async function loadData() { applyState(await getQueueState()); nowPlaying = await tabOps.getNowPlayingTab(); }
+  async function loadData() {
+    try {
+      applyState(await getQueueState());
+      nowPlaying = await tabOps.getNowPlayingTab();
+      loadError = false;
+    } catch {
+      loadError = true;
+    }
+  }
   async function persistUi() { await saveUiState({ activeCollection, grouping }); }
 
   function clearSelectionMode() {
@@ -68,18 +82,18 @@
     const btn = event.currentTarget;
     if (!(btn instanceof HTMLElement)) return;
     const rect = btn.getBoundingClientRect();
+    tabMenuButtonEl = btn instanceof HTMLButtonElement ? btn : null;
     menuOpen = true;
-    // Anchor below the ⋯ control; clamp horizontally after mount.
+    // Anchor below the ⋯ control, then flip/clamp after the menu has mounted.
     menuPos = { top: rect.bottom + 4, left: rect.right };
     void tick().then(() => {
       if (!tabMenuEl || !menuPos) return;
-      const menuWidth = tabMenuEl.offsetWidth;
-      const pad = 8;
-      const maxLeft = window.innerWidth - menuWidth - pad;
-      menuPos = {
-        top: menuPos.top,
-        left: Math.max(pad, Math.min(rect.right - menuWidth, maxLeft)),
-      };
+      menuPos = positionFloatingMenu(
+        { top: rect.top, right: rect.right, bottom: rect.bottom },
+        { width: tabMenuEl.offsetWidth, height: tabMenuEl.offsetHeight },
+        { width: window.innerWidth, height: window.innerHeight },
+      );
+      tabMenuItemEl?.focus();
     });
   }
 
@@ -93,13 +107,21 @@
     query = '';
     reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     void (async () => {
-      const ui = await getUiState();
-      activeCollection = ui.activeCollection;
-      grouping = ui.grouping;
-      await loadData();
-      hydrated = true;
-      await tick();
-      scrollActiveTabIntoView();
+      try {
+        const ui = await getUiState();
+        activeCollection = ui.activeCollection;
+        grouping = ui.grouping;
+        await loadData();
+        await tick();
+        scrollActiveTabIntoView();
+      } catch {
+        loadError = true;
+      } finally {
+        hydrated = true;
+        loading = false;
+        await tick();
+        animateItems = true;
+      }
     })();
     const storageListener = () => void loadData();
     const activatedListener = () => void loadData();
@@ -124,11 +146,19 @@
       menuOpen = false;
       menuPos = null;
     };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !menuOpen) return;
+      event.preventDefault();
+      menuOpen = false;
+      menuPos = null;
+      tabMenuButtonEl?.focus();
+    };
     chrome.storage?.onChanged.addListener(storageListener);
     chrome.tabs?.onActivated.addListener(activatedListener);
     chrome.tabs?.onUpdated.addListener(updatedListener);
     chrome.runtime?.onMessage.addListener(messageListener);
     document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', onScrollOrResize);
     // Capture scroll from tabs-scroll (and nested) so a clipped anchor can't leave a stranded menu.
     document.addEventListener('scroll', onScrollOrResize, true);
@@ -138,6 +168,7 @@
       chrome.tabs?.onUpdated.removeListener(updatedListener);
       chrome.runtime?.onMessage.removeListener(messageListener);
       document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', onScrollOrResize);
       document.removeEventListener('scroll', onScrollOrResize, true);
     };
@@ -194,6 +225,7 @@
   async function startRename() {
     if (!activeCollection) return;
     menuOpen = false;
+    menuPos = null;
     renaming = true;
     renameValue = activeCollection;
     await tick();
@@ -259,7 +291,7 @@
 <main>
   <header><div class="brand"><ParkBadge size={30}/><h1>TubePark</h1></div><ParkMeter count={capacity.count} max={capacity.max} status={capacity.status}/></header>
   <section class="controls">
-    <input aria-label="Search videos" placeholder="Search title or channel…" bind:value={query}/>
+    <input type="search" aria-label="Search videos" placeholder="Search title or channel…" bind:value={query}/>
 
     <div class="toolbar-row">
       <div class="tabs-wrap" role="tablist" aria-label="Collections">
@@ -312,6 +344,7 @@
                     title="Collection menu"
                     aria-expanded={menuOpen}
                     aria-haspopup="menu"
+                    aria-controls="collection-menu"
                     onclick={toggleTabMenu}
                   >⋯</button>
                 {/if}
@@ -334,13 +367,14 @@
       <div
         class="tab-menu"
         data-tab-menu
+        id="collection-menu"
         role="menu"
         bind:this={tabMenuEl}
         style:top="{menuPos.top}px"
         style:left="{menuPos.left}px"
         transition:scale={{ duration: reduced ? 120 : 160, start: reduced ? 1 : 0.94, easing: cubicOut }}
       >
-        <button type="button" role="menuitem" onclick={() => void startRename()}>Rename</button>
+        <button type="button" role="menuitem" bind:this={tabMenuItemEl} onclick={() => void startRename()}>Rename</button>
       </div>
     {/if}
 
@@ -350,14 +384,17 @@
           type="button"
           class="assign"
           disabled={selected.length === 0}
+          aria-expanded={assigning}
+          aria-haspopup="menu"
+          aria-controls="collection-picker"
           onclick={() => { assigning = !assigning; }}
         >
           Add to collection ({selected.length})
         </button>
         {#if assigning && selected.length > 0}
-          <div class="picker" role="listbox" aria-label="Select collection">
+          <div class="picker" id="collection-picker" role="menu" aria-label="Select collection">
             {#each namedCollections as item (item.name)}
-              <button type="button" role="option" onclick={() => void assignTo(item.name)}>{item.name}</button>
+              <button type="button" role="menuitem" onclick={() => void assignTo(item.name)}>{item.name}</button>
             {/each}
             <form class="new-row" onsubmit={(e) => { e.preventDefault(); void createAndAssign(); }}>
               <input
@@ -376,12 +413,19 @@
     {/if}
   </section>
   <div class="content">
-    {#if filtered.length === 0}<div class="empty"><ParkBadge size={44}/><h3>{query ? 'No results' : 'No videos parked yet'}</h3><p>{query ? 'Try a different search.' : 'Park a video on YouTube to get started.'}</p></div>{/if}
-    {#if capacity.status === 'warning' || capacity.status === 'full'}
+    {#if loading}
+      <div class="empty loading-state" aria-busy="true"><ParkBadge size={34}/><h3>Loading your queue…</h3></div>
+    {:else if loadError}
+      <div class="empty load-error" role="alert"><ParkBadge size={34}/><h3>Could not load your queue</h3><button type="button" class="pick-btn" onclick={() => { loading = true; void loadData().finally(() => { loading = false; }); }}>Retry</button></div>
+    {:else if filtered.length === 0}
+      <div class="empty"><ParkBadge size={44}/><h3>{query ? 'No results' : 'No videos parked yet'}</h3><p>{query ? 'Try a different search.' : 'Park a video on YouTube to get started.'}</p></div>
+    {/if}
+    {#if !loading && !loadError && (capacity.status === 'warning' || capacity.status === 'full')}
       <div class="banner" class:banner-full={capacity.status === 'full'}><Icon name="warning" size={16}/>{capacity.status === 'full' ? `Queue full (${capacity.count}/${capacity.max})` : `Queue almost full (${capacity.count}/${capacity.max})`}</div>
     {/if}
-    {#each grouped as group}
-      <section class:unknown={group.kind === 'unknown'}><h2>{group.label} <span>{group.items.length}</span>{#if group.kind === 'older'}<button class="bulk-btn" onclick={() => removeGroup(group.items)}>Remove all</button>{/if}</h2>
+    {#if !loading && !loadError}
+      {#each grouped as group}
+      <section class:unknown={group.kind === 'unknown'}><h2>{group.label} <span>{group.items.length}</span>{#if group.kind === 'older'}<button type="button" class="bulk-btn" onclick={() => removeGroup(group.items)}>Remove all</button>{/if}</h2>
         {#each group.items as video (video.id)}
           {@const isSelected = selected.includes(video.id)}
           <article
@@ -391,9 +435,9 @@
             class:selected={selecting && isSelected}
             ondragover={(e) => { if (video.pinned) e.preventDefault(); }}
             ondrop={() => { if (video.pinned) void dropOn(video.id); }}
-            in:parkIn={{ reduced }}
+            in:parkIn={{ reduced, skip: !animateItems }}
             out:parkOut={{ reduced }}
-            animate:flip={{ duration: reduced ? 150 : 250 }}
+            animate:flip={{ duration: reduced ? 0 : 250 }}
           >
             {#if selecting}
               <label class="check" class:on={isSelected}>
@@ -407,14 +451,20 @@
               </label>
             {/if}
             {#if video.pinned}<button class="grip" draggable="true" aria-label="Reorder {video.title}" title="Drag to reorder" ondragstart={() => draggedId = video.id}><Icon name="grip" size={16}/></button>{/if}
-            <button class="thumb" onclick={() => selecting ? (selected = isSelected ? selected.filter((id) => id !== video.id) : [...selected, video.id]) : tabOps.openVideo(video.id, video.resumeAt)}><Thumbnail videoId={video.id} channel={video.channel}/></button>
+            <button
+              type="button"
+              class="thumb"
+              aria-label={selecting ? (isSelected ? `Deselect ${video.title}` : `Select ${video.title}`) : `Play ${video.title}`}
+              onclick={() => selecting ? (selected = isSelected ? selected.filter((id) => id !== video.id) : [...selected, video.id]) : tabOps.openVideo(video.id, video.resumeAt)}
+            ><Thumbnail videoId={video.id} channel={video.channel} altText={selecting ? `Select ${video.title}` : `Play ${video.title}`}/></button>
             <div class="body"><strong>{video.title}</strong><small>{#if nowPlaying?.videoId === video.id}<Equalizer />{/if}{video.channel} · {formatAgeBadge(video)}{#if video.durationSec !== undefined} · {formatDuration(video.durationSec)}{/if}</small><div class="actions"><button type="button" aria-label="Play {video.title}" title="Play" onclick={() => tabOps.openVideo(video.id, video.resumeAt)}><Icon name="play" size={14}/></button><button type="button" aria-label={video.pinned ? `Unpin ${video.title}` : `Pin ${video.title}`} title={video.pinned ? 'Unpin' : 'Pin'} onclick={async () => applyState(await togglePinned(video.id))}><Icon name={video.pinned ? 'pinFill' : 'pin'} size={14}/></button><button type="button" aria-label="Remove {video.title}" title="Remove" onclick={() => remove(video)}><Icon name="x" size={14}/></button></div></div>
           </article>
         {/each}
       </section>
-    {/each}
+      {/each}
+    {/if}
   </div>
-  {#if pendingCount}<div class="toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300, easing: cubicOut }}><span>{pendingCount > 1 ? `${pendingCount} videos removed` : 'Video removed'}</span><button onclick={undo}>Undo</button></div>{/if}
+  {#if pendingCount}<div class="toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 300, easing: cubicOut }}><span>{pendingCount > 1 ? `${pendingCount} videos removed` : 'Video removed'}</span><button type="button" onclick={undo}>Undo</button></div>{/if}
 </main>
 
 <style>
@@ -432,7 +482,7 @@
   .tab-item{position:relative;display:flex;align-items:center;flex-shrink:0;gap:0;z-index:0}
   .tab-item.active{z-index:2}
   .tab,.pick-btn,.assign,.actions button,.picker button,.new-row button,.tab-more,.tab-menu button{
-    border:1px solid var(--tp-border);background:var(--tp-surface);color:var(--tp-text-2);border-radius:6px;padding:5px 8px;cursor:pointer
+    border:1px solid var(--tp-border);background:var(--tp-surface);color:var(--tp-text-2);border-radius:6px;padding:5px 8px;cursor:pointer;min-height:40px
   }
   .tab{white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
   .sticky-tab{flex-shrink:0}
@@ -441,14 +491,14 @@
   .tab-item.active .tab{border-top-right-radius:0;border-bottom-right-radius:0;border-right:0}
   .tab-more{border-top-left-radius:0;border-bottom-left-radius:0;padding:5px 7px;line-height:1;font-weight:700;letter-spacing:.04em;position:relative;z-index:1}
   .tab-item.active .tab-more{background:var(--tp-accent);color:var(--tp-accent-contrast);border-color:var(--tp-accent)}
-  .tab-menu{position:fixed;z-index:40;min-width:120px;padding:4px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-surface);box-shadow:0 8px 24px rgba(0,0,0,.28);display:grid;transform-origin:top right}
+  .tab-menu{position:fixed;z-index:40;min-width:120px;padding:4px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-surface);box-shadow:var(--tp-shadow-lift);display:grid;transform-origin:top right}
   .tab-menu button{border:0;text-align:left;border-radius:6px}
   .tab-menu button:hover{background:var(--tp-surface-2)}
-  .rename-input{box-sizing:border-box;width:140px;padding:5px 8px;border:1px solid var(--tp-accent);border-radius:6px;background:var(--tp-surface);color:var(--tp-text)}
+  .rename-input{box-sizing:border-box;width:140px;min-height:40px;padding:5px 8px;border:1px solid var(--tp-accent);border-radius:6px;background:var(--tp-surface);color:var(--tp-text)}
 
   .toolbar-end{display:flex;align-items:center;gap:6px;flex-shrink:0}
   .seg{display:flex}
-  .seg button{border:1px solid var(--tp-border);background:var(--tp-surface);color:var(--tp-text-2);padding:5px 10px;cursor:pointer;white-space:nowrap}
+  .seg button{border:1px solid var(--tp-border);background:var(--tp-surface);color:var(--tp-text-2);min-height:40px;padding:5px 10px;cursor:pointer;white-space:nowrap}
   .seg button:first-child{border-radius:6px 0 0 6px}
   .seg button:last-child{border-radius:0 6px 6px 0;border-left-width:0}
   .seg button.active{background:var(--tp-accent);color:var(--tp-accent-contrast);border-color:var(--tp-accent)}
@@ -461,37 +511,47 @@
   .picker{display:grid;gap:4px;padding:8px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-surface)}
   .picker > button{text-align:left}
   .new-row{display:flex;gap:6px}
-  .new-row input{flex:1;min-width:0;padding:6px 8px;border:1px solid var(--tp-border);border-radius:6px;background:var(--tp-bg);color:var(--tp-text)}
+  .new-row input{flex:1;min-width:0;min-height:40px;padding:6px 8px;border:1px solid var(--tp-border);border-radius:6px;background:var(--tp-bg);color:var(--tp-text)}
   .clear-assign{color:var(--tp-danger);border-color:var(--tp-danger)}
 
-  .content{overflow:auto;padding:16px;display:grid;gap:18px}
-  h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--tp-text-2)}
-  h2 span{background:var(--tp-surface-2);border-radius:10px;padding:1px 6px}
+  .content{min-height:0;overflow:auto;padding:16px;display:grid;gap:18px}
+  h2{margin:0 0 8px;font-size:11px;line-height:1.2;text-transform:uppercase;letter-spacing:.06em;color:var(--tp-text-2);text-wrap:balance}
+  h2 span{background:var(--tp-surface-2);border-radius:10px;padding:1px 6px;font-variant-numeric:tabular-nums}
   .unknown{opacity:.7}
-  article{display:flex;align-items:flex-start;gap:9px;padding:9px;margin-top:8px;background:var(--tp-surface);border:1px solid var(--tp-border);border-radius:10px;transition:border-color .15s ease, background-color .15s ease, transform .15s var(--tp-ease-gentle)}
+  article{display:flex;align-items:flex-start;gap:9px;padding:8px;margin-top:8px;background:var(--tp-surface);border:1px solid var(--tp-border);border-radius:var(--tp-r-card);transition:border-color .15s ease, background-color .15s ease, transform .15s var(--tp-ease-gentle)}
   article.pinned,article.playing{border-color:var(--tp-accent)}
   article.selected{border-color:var(--tp-accent);background:color-mix(in srgb, var(--tp-accent) 10%, var(--tp-surface))}
   @media (hover: hover) and (pointer: fine) {
     article:hover { transform: translateY(-2px); }
   }
-  .check{position:relative;flex-shrink:0;width:18px;height:18px;margin-top:2px;border:1px solid var(--tp-border);border-radius:5px;background:var(--tp-bg);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease, border-color .12s ease}
-  .check:hover{border-color:var(--tp-text-3)}
-  .check.on{background:var(--tp-accent);border-color:var(--tp-accent);box-shadow:0 0 0 1px color-mix(in srgb, var(--tp-accent) 35%, transparent)}
+  .check{position:relative;flex-shrink:0;width:40px;height:40px;margin-top:0;border:0;border-radius:8px;background:transparent;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease, transform var(--tp-dur-press) var(--tp-ease-snappy)}
+  .check::before{content:"";position:absolute;width:18px;height:18px;border:1px solid var(--tp-border);border-radius:5px;background:var(--tp-bg);transition:background-color .12s ease, border-color .12s ease, box-shadow .12s ease}
+  .check:hover::before{border-color:var(--tp-text-3)}
+  .check.on::before{background:var(--tp-accent);border-color:var(--tp-accent);box-shadow:0 0 0 1px color-mix(in srgb, var(--tp-accent) 35%, transparent)}
   .check input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
   .check:focus-within{outline:2px solid var(--tp-accent);outline-offset:2px}
-  .check-mark{width:10px;height:6px;border-left:2px solid transparent;border-bottom:2px solid transparent;transform:translateY(-1px) rotate(-45deg);pointer-events:none}
+  .check-mark{position:relative;z-index:1;width:10px;height:6px;border-left:2px solid transparent;border-bottom:2px solid transparent;transform:translateY(-1px) rotate(-45deg);pointer-events:none}
   .check.on .check-mark{border-color:var(--tp-accent-contrast)}
-  .grip{cursor:grab;color:var(--tp-text-3);border:0;background:none;padding:4px}
+  .grip{display:inline-flex;align-items:center;justify-content:center;width:40px;min-height:40px;cursor:grab;color:var(--tp-text-3);border:0;background:none;padding:0;border-radius:8px;transition:color var(--tp-dur-micro) ease, background-color var(--tp-dur-micro) ease, transform var(--tp-dur-press) var(--tp-ease-snappy)}
+  .grip:hover{background:var(--tp-surface-2);color:var(--tp-text-2)}
+  .grip:active{transform:scale(0.96)}
   .banner{background:var(--tp-warn-bg);border:1px solid var(--tp-warn-border);color:var(--tp-warn-text);padding:9px 12px;border-radius:8px;display:flex;gap:8px}
   .banner-full{background:var(--tp-danger-soft);border-color:var(--tp-danger);color:var(--tp-danger)}
-  .bulk-btn{float:right;border:1px solid var(--tp-danger);background:transparent;color:var(--tp-danger);border-radius:8px;cursor:pointer}
-  .thumb{padding:0;border:0;background:none}
+  .bulk-btn{float:right;min-height:40px;padding:5px 8px;border:1px solid var(--tp-danger);background:transparent;color:var(--tp-danger);border-radius:8px;cursor:pointer}
+  .thumb{padding:0;border:0;background:none;cursor:pointer;border-radius:6px;line-height:0}
   .body{min-width:0;flex:1;display:grid;gap:4px}
   .body strong{font-size:13px}
-  .body small{font-size:11px;color:var(--tp-text-3)}
+  .body small{font-size:11px;color:var(--tp-text-2);text-wrap:pretty}
   .actions{display:flex;gap:4px}
-  .actions button{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0}
+  .actions button{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;transition:background-color var(--tp-dur-micro) ease, transform var(--tp-dur-press) var(--tp-ease-snappy)}
+  .actions button:active{transform:scale(0.96)}
   .empty{text-align:center;color:var(--tp-text-3);padding:38px}
-  .toast{position:fixed;bottom:16px;left:16px;right:16px;padding:10px 14px;border-radius:8px;background:var(--tp-text);color:var(--tp-bg);display:flex;justify-content:space-between}
-  .toast button{border:0;background:none;color:var(--tp-accent);font-weight:700}
+  .empty h3,.empty p{margin:0}
+  .empty h3{line-height:1.25;text-wrap:balance}
+  .empty p{margin-top:6px;text-wrap:pretty}
+  .load-error{color:var(--tp-danger)}
+  .load-error .pick-btn{color:var(--tp-accent)}
+  .toast{position:fixed;bottom:16px;left:16px;right:16px;padding:10px 14px;border-radius:8px;background:var(--tp-text);color:var(--tp-bg);display:flex;justify-content:space-between;box-shadow:var(--tp-shadow-lift)}
+  .toast button{min-height:40px;border:0;background:none;color:var(--tp-accent);font-weight:700;cursor:pointer}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--tp-accent);outline-offset:2px}
 </style>

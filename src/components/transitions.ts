@@ -5,16 +5,25 @@ interface ParkInParams {
 	delay?: number;
 	duration?: number;
 	reduced?: boolean;
+	skip?: boolean;
 }
 
 /**
  * Signature enter: item slots in from above with a 1.5deg settle-tilt.
- * Reduced motion collapses it to a plain 150ms fade.
+ * Reduced motion collapses it to a plain 150ms fade. `skip` keeps hydrated
+ * lists from replaying an intro animation when the popup/side panel opens.
  */
 export function parkIn(
 	_node: Element,
-	{ delay = 0, duration = 240, reduced = false }: ParkInParams = {},
+	{ delay = 0, duration = 240, reduced = false, skip = false }: ParkInParams = {},
 ): TransitionConfig {
+	if (skip) {
+		return {
+			delay: 0,
+			duration: 0,
+			css: () => "",
+		};
+	}
 	if (reduced) {
 		return {
 			delay,

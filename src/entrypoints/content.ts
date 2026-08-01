@@ -478,7 +478,7 @@ function injectToastStyles() {
       align-items: center;
       gap: 6px;
       padding: 7px 12px 7px 9px;
-      border: 1px solid #2f9e44;
+      border: 1px solid #267f3b;
       border-radius: 999px;
       background: rgba(0, 0, 0, 0.78);
       backdrop-filter: blur(6px);
@@ -498,7 +498,7 @@ function injectToastStyles() {
     .${WATCH_BTN_CLASS} .tubepark-watch-park-label {
       white-space: nowrap;
     }
-    /* Identity-green border mirrors --tp-accent (tokens.css): #2f9e44 light,
+    /* Identity-green border mirrors --tp-accent (tokens.css): #267f3b light,
      * #51c86c dark — so the pill reads against YouTube's dark bg instead of
      * camouflaging, and stays on-brand with the popup/side-panel accent. */
     @media (prefers-color-scheme: dark) {

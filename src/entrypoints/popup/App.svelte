@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { flip } from 'svelte/animate';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -15,6 +15,7 @@
   import { parkIn, parkOut } from '../../components/transitions';
   import { flyChip } from '../../components/fly-chip';
   import type { ParkedVideo, CapacityState } from '../../shared/types';
+  import { getParkableOtherTabCount, getParkAllLabel } from '../../shared/ui-helpers';
 
   const FALLBACK_META: TabMeta = { channel: 'YouTube', currentTime: 0 };
 
@@ -71,6 +72,12 @@
   let pendingVideos = $state<ParkedVideo[]>([]);
 
   let reduced = $state(false);
+  let loading = $state(true);
+  let loadError = $state(false);
+  let hydrated = $state(false);
+  let animateItems = $state(false);
+  let actionBusy = $state(false);
+  let actionFeedback = $state<{ tone: 'success' | 'warning' | 'danger'; message: string } | null>(null);
   let parkBtnEl = $state<HTMLButtonElement | null>(null);
   let parkAllBtnEl = $state<HTMLButtonElement | null>(null);
   let listAnchorEl = $state<HTMLElement | null>(null);
@@ -80,22 +87,37 @@
     capacity = state.capacity;
   }
 
-  async function loadData() {
-    applyState(await getQueueState());
+  async function loadData(showLoading = !hydrated) {
+    if (showLoading) loading = true;
+    try {
+      applyState(await getQueueState());
 
-    const activeTab = await tabOps.getActiveTab();
-    currentTabInfo = activeTab;
-    currentTabIsWatch = activeTab !== null && extractYouTubeVideoId(activeTab.url) !== null;
+      const activeTab = await tabOps.getActiveTab();
+      currentTabInfo = activeTab;
+      currentTabIsWatch = activeTab !== null && extractYouTubeVideoId(activeTab.url) !== null;
 
-    const watchTabs = await tabOps.getWatchTabs();
-    openWatchTabCount = watchTabs.length;
+      const watchTabs = await tabOps.getWatchTabs();
+      openWatchTabCount = watchTabs.length;
 
-    nowPlaying = await tabOps.getNowPlayingTab();
+      nowPlaying = await tabOps.getNowPlayingTab();
+      loadError = false;
+    } catch {
+      loadError = true;
+    } finally {
+      if (showLoading) {
+        loading = false;
+        hydrated = true;
+      }
+    }
   }
 
   onMount(() => {
     reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    void loadData();
+    void (async () => {
+      await loadData();
+      await tick();
+      animateItems = true;
+    })();
     const storageListener = () => void loadData();
     const commitPending = () => {
       if (pendingCount > 0) chrome.runtime?.sendMessage({ type: MSG.COMMIT_PENDING });
@@ -116,46 +138,94 @@
   }
 
   async function handleParkCurrentTab() {
-    if (!currentTabInfo?.url) return;
+    if (actionBusy || !currentTabInfo?.url) return;
     const videoId = extractYouTubeVideoId(currentTabInfo.url);
     if (!videoId) return;
 
-    const meta = currentTabInfo.id
-      ? await fetchTabMeta(currentTabInfo.id)
-      : FALLBACK_META;
-    const result = await parkVideo(
-      parkedFromTab(videoId, currentTabInfo.title, meta),
-    );
+    actionBusy = true;
+    actionFeedback = null;
+    try {
+      const meta = currentTabInfo.id
+        ? await fetchTabMeta(currentTabInfo.id)
+        : FALLBACK_META;
+      const result = await parkVideo(
+        parkedFromTab(videoId, currentTabInfo.title, meta),
+      );
 
-    if (result.success || result.duplicate) {
-      launchChip(parkBtnEl);
-      if (currentTabInfo.id) await tabOps.closeTab(currentTabInfo.id);
+      if (result.success || result.duplicate) {
+        launchChip(parkBtnEl);
+        if (currentTabInfo.id) await tabOps.closeTab(currentTabInfo.id);
+        actionFeedback = {
+          tone: 'success',
+          message: result.duplicate
+            ? 'Already in your queue; tab closed.'
+            : 'Parked this tab and closed it.',
+        };
+      } else if (result.full) {
+        actionFeedback = { tone: 'warning', message: 'Queue is full. Remove an older video first.' };
+      } else {
+        actionFeedback = { tone: 'danger', message: 'Could not park this tab. Try again.' };
+      }
+    } catch {
+      actionFeedback = { tone: 'danger', message: 'Could not park this tab. Try again.' };
+    } finally {
+      await loadData();
+      actionBusy = false;
     }
-    await loadData();
   }
 
   async function handleParkAll() {
-    const watchTabs = await tabOps.getWatchTabs();
-    const activeTab = await tabOps.getActiveTab();
+    if (actionBusy) return;
 
-    let parked = 0;
-    for (const tab of watchTabs) {
-      if (activeTab && tab.id === activeTab.id) continue;
-      if (!tab.url) continue;
-      const videoId = extractYouTubeVideoId(tab.url);
-      if (!videoId) continue;
+    actionBusy = true;
+    actionFeedback = null;
+    try {
+      const watchTabs = await tabOps.getWatchTabs();
+      const activeTab = await tabOps.getActiveTab();
 
-      // One GET_TAB_META per tab (G4 channel + F4 currentTime). CS-miss → fallback.
-      const meta = tab.id ? await fetchTabMeta(tab.id) : FALLBACK_META;
-      const result = await parkVideo(parkedFromTab(videoId, tab.title, meta));
+      let parked = 0;
+      let reachedCapacity = false;
+      for (const tab of watchTabs) {
+        if (activeTab && tab.id === activeTab.id) continue;
+        if (!tab.url) continue;
+        const videoId = extractYouTubeVideoId(tab.url);
+        if (!videoId) continue;
 
-      if (result.success || result.duplicate) {
-        parked += 1;
-        if (tab.id) await tabOps.closeTab(tab.id);
+        // One GET_TAB_META per tab (G4 channel + F4 currentTime). CS-miss → fallback.
+        const meta = tab.id ? await fetchTabMeta(tab.id) : FALLBACK_META;
+        const result = await parkVideo(parkedFromTab(videoId, tab.title, meta));
+
+        if (result.success || result.duplicate) {
+          parked += 1;
+          if (tab.id) await tabOps.closeTab(tab.id);
+        } else if (result.full) {
+          reachedCapacity = true;
+          break;
+        }
       }
+      if (parked > 0) launchChip(parkAllBtnEl, `\u00d7${parked}`);
+
+      if (reachedCapacity) {
+        actionFeedback = {
+          tone: 'warning',
+          message: parked > 0
+            ? `${parked} tab${parked === 1 ? '' : 's'} parked. Queue is now full.`
+            : 'Queue is full. Remove an older video first.',
+        };
+      } else if (parked > 0) {
+        actionFeedback = {
+          tone: 'success',
+          message: `${parked} YouTube tab${parked === 1 ? '' : 's'} parked.`,
+        };
+      } else {
+        actionFeedback = { tone: 'danger', message: 'No other YouTube tabs could be parked.' };
+      }
+    } catch {
+      actionFeedback = { tone: 'danger', message: 'Could not park the other tabs. Try again.' };
+    } finally {
+      await loadData();
+      actionBusy = false;
     }
-    if (parked > 0) launchChip(parkAllBtnEl, `\u00d7${parked}`);
-    await loadData();
   }
 
   async function handleRemove(video: ParkedVideo) {
@@ -196,6 +266,10 @@
 
   const upNextCount = $derived(queue.filter((v) => v.pinned).length);
   const recentCount = $derived(queue.filter((v) => !v.pinned).length);
+  const parkableOtherTabCount = $derived(
+    getParkableOtherTabCount(openWatchTabCount, currentTabIsWatch),
+  );
+  const parkAllLabel = $derived(getParkAllLabel(currentTabIsWatch));
 
   /** Pick a display title for the now-playing tab. The live tab title wins;
    * when it's missing or the generic `YouTube` (tab still loading), fall back
@@ -235,7 +309,7 @@
     </div>
   {/if}
 
-  <section class="actions">
+  <section class="actions" aria-busy={actionBusy}>
     <div class="tab-info">
       <Icon name="monitorPlay" size={15} />
       <span>{openWatchTabCount} YouTube video tab{openWatchTabCount === 1 ? '' : 's'} open</span>
@@ -243,9 +317,9 @@
 
     <div class="buttons">
       {#if currentTabIsWatch}
-        <button class="btn btn-primary" bind:this={parkBtnEl} onclick={handleParkCurrentTab}>
+        <button class="btn btn-primary" bind:this={parkBtnEl} onclick={handleParkCurrentTab} disabled={actionBusy}>
           <ParkBadge size={16} />
-          Park this tab & close
+          {actionBusy ? 'Parking…' : 'Park this tab & close'}
         </button>
       {/if}
 
@@ -253,12 +327,22 @@
         class="btn btn-secondary"
         bind:this={parkAllBtnEl}
         onclick={handleParkAll}
-        disabled={openWatchTabCount === 0}
+        disabled={actionBusy || parkableOtherTabCount === 0}
       >
         <Icon name="queue" size={15} />
-        Park all YouTube tabs
+        {actionBusy ? 'Parking…' : parkAllLabel}
       </button>
     </div>
+
+    {#if actionFeedback}
+      <div
+        class="action-feedback"
+        class:action-feedback-warning={actionFeedback.tone === 'warning'}
+        class:action-feedback-danger={actionFeedback.tone === 'danger'}
+        role={actionFeedback.tone === 'danger' ? 'alert' : 'status'}
+        aria-live={actionFeedback.tone === 'danger' ? 'assertive' : 'polite'}
+      >{actionFeedback.message}</div>
+    {/if}
   </section>
 
   {#if nowPlaying}
@@ -277,13 +361,23 @@
         <span class="count-chip"><Icon name="pin" size={12} />{upNextCount} Up next</span>
         <span class="count-chip"><Icon name="clock" size={12} />{recentCount} Recent</span>
       </div>
-      <button class="btn-link" onclick={handleOpenSidePanel}>
+      <button type="button" class="btn-link" onclick={handleOpenSidePanel}>
         <Icon name="sidebar" size={14} />
         Side panel
       </button>
     </div>
 
-    {#if recentItems.length === 0}
+    {#if loading}
+      <div class="loading-state" aria-busy="true">
+        <ParkBadge size={24} />
+        <p>Loading your queue…</p>
+      </div>
+    {:else if loadError}
+      <div class="load-error" role="alert">
+        <p>Could not load your queue.</p>
+        <button class="btn-link" onclick={() => void loadData(true)}>Retry</button>
+      </div>
+    {:else if recentItems.length === 0}
       <div class="empty">
         <ParkBadge size={30} />
         <p>No videos parked yet</p>
@@ -294,18 +388,18 @@
         {#each recentItems as video, i (video.id)}
           <li
             class="card"
-            in:parkIn={{ delay: reduced ? 0 : i * 40, reduced }}
+            in:parkIn={{ delay: reduced ? 0 : i * 40, reduced, skip: !animateItems }}
             out:parkOut={{ reduced }}
-            animate:flip={{ duration: reduced ? 150 : 300 }}
+            animate:flip={{ duration: reduced ? 0 : 300 }}
           >
-            <button class="thumb" onclick={() => handlePlay(video)} aria-label="Play {video.title}">
-              <Thumbnail videoId={video.id} channel={video.channel} />
+            <button type="button" class="thumb" onclick={() => handlePlay(video)} aria-label="Play {video.title}">
+              <Thumbnail videoId={video.id} channel={video.channel} altText={`Play ${video.title}`} />
             </button>
             <div class="card-body">
               <span class="card-title">{video.title}</span>
               <span class="card-meta">{video.channel}</span>
             </div>
-            <button class="icon-btn danger" title="Remove" onclick={() => handleRemove(video)}>
+            <button type="button" class="icon-btn danger" title="Remove" aria-label="Remove {video.title}" onclick={() => handleRemove(video)}>
               <Icon name="x" size={16} />
             </button>
           </li>
@@ -315,7 +409,7 @@
   </section>
 
   {#if pendingCount > 0}
-    <div class="undo-toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 240, easing: cubicOut }}><span>Video removed</span><button onclick={handleUndo}>Undo</button></div>
+    <div class="undo-toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 240, easing: cubicOut }}><span>Video removed</span><button type="button" onclick={handleUndo}>Undo</button></div>
   {/if}
 </main>
 
@@ -388,6 +482,29 @@
     gap: 8px;
   }
 
+  .action-feedback {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--tp-border);
+    border-radius: var(--tp-r-btn);
+    background: var(--tp-surface-2);
+    color: var(--tp-text-2);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .action-feedback-warning {
+    background: var(--tp-warn-bg);
+    border-color: var(--tp-warn-border);
+    color: var(--tp-warn-text);
+  }
+
+  .action-feedback-danger {
+    background: var(--tp-danger-soft);
+    border-color: var(--tp-danger);
+    color: var(--tp-danger);
+  }
+
   .btn {
     font-family: inherit;
     font-size: 13px;
@@ -400,6 +517,7 @@
     align-items: center;
     justify-content: center;
     gap: 7px;
+    min-height: 40px;
     transition:
       transform var(--tp-dur-press) var(--tp-ease-snappy),
       background-color var(--tp-dur-micro) ease,
@@ -515,11 +633,22 @@
     font-weight: 600;
     font-family: inherit;
     cursor: pointer;
-    padding: 0;
+    min-height: 40px;
+    padding: 8px;
+    border-radius: var(--tp-r-btn);
+    transition:
+      color var(--tp-dur-micro) ease,
+      background-color var(--tp-dur-micro) ease,
+      transform var(--tp-dur-press) var(--tp-ease-snappy);
   }
 
   .btn-link:hover {
     color: var(--tp-accent-hover);
+    background: var(--tp-surface-2);
+  }
+
+  .btn-link:active {
+    transform: scale(0.96);
   }
 
   .empty {
@@ -541,6 +670,28 @@
 
   .empty-sub {
     font-size: 11px;
+  }
+
+  .loading-state,
+  .load-error {
+    min-height: 96px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    text-align: center;
+    color: var(--tp-text-2);
+  }
+
+  .loading-state p,
+  .load-error p {
+    margin: 0;
+    font-size: 12px;
+  }
+
+  .load-error {
+    color: var(--tp-danger);
   }
 
   .recent {
@@ -617,7 +768,9 @@
     border: none;
     color: var(--tp-text-3);
     cursor: pointer;
-    padding: 4px;
+    width: 40px;
+    min-height: 40px;
+    padding: 0;
     border-radius: 6px;
     flex-shrink: 0;
     transition:
@@ -637,6 +790,15 @@
     font-size: 12px; box-shadow: var(--tp-shadow-lift);
   }
   .undo-toast button { border: 0; background: none; color: var(--tp-accent); font-weight: 700; cursor: pointer; }
+
+  .btn:focus-visible,
+  .btn-link:focus-visible,
+  .thumb:focus-visible,
+  .icon-btn:focus-visible,
+  .undo-toast button:focus-visible {
+    outline: 2px solid var(--tp-accent);
+    outline-offset: 2px;
+  }
 
   .icon-btn.danger:hover {
     color: var(--tp-danger);
