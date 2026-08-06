@@ -26,6 +26,7 @@ import {
 	resolveShortsActionRail,
 	resolveWatchActionRow,
 	resolveWatchButtonTextColor,
+	WATCH_BUTTON_HEIGHT,
 	type WatchButtonMode,
 	type WatchButtonLayoutSnapshot,
 	type WatchButtonRect,
@@ -105,7 +106,7 @@ const WATCH_BTN_COMPACT_CLASS = "tubepark-watch-park-btn-compact";
 const WATCH_BTN_HIDDEN_CLASS = "tubepark-watch-park-btn-hidden";
 const WATCH_BTN_SHORTS_CLASS = "tubepark-watch-park-btn-shorts";
 const WATCH_BTN_ICON_WIDTH = 44;
-const WATCH_BTN_REQUIRED_HEIGHT = 44;
+const WATCH_BTN_REQUIRED_HEIGHT = WATCH_BUTTON_HEIGHT;
 const WATCH_MENU_ITEM_ATTR = "data-tubepark-watch-menu-item";
 /** Time after a click on the watch-page 3-dot trigger during which we treat a
  * newly opened popup as the watch actions menu (and inject our item into it). */

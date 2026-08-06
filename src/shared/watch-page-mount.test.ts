@@ -8,6 +8,7 @@ import {
 	resolveShortsActionRail,
 	resolveWatchActionRow,
 	resolveWatchButtonTextColor,
+	WATCH_BUTTON_HEIGHT,
 	type WatchButtonLayoutSnapshot,
 } from "./watch-page-mount";
 
@@ -105,6 +106,12 @@ describe("chooseWatchButtonMode", () => {
 				requiredHeight: 48,
 			}),
 		).toBe("hidden");
+	});
+});
+
+describe("watch button dimensions", () => {
+	it("uses YouTube's native 40px action-button height", () => {
+		expect(WATCH_BUTTON_HEIGHT).toBe(40);
 	});
 });
 

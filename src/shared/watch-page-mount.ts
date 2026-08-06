@@ -20,6 +20,9 @@ export interface WatchButtonRect {
 	bottom: number;
 }
 
+/** Height shared with YouTube's native action-row controls. */
+export const WATCH_BUTTON_HEIGHT = 40;
+
 export interface WatchButtonLayoutSnapshot {
 	button: WatchButtonRect;
 	container: WatchButtonRect;
