@@ -15,11 +15,27 @@ import { type IconName, type IconPath, icons } from "../shared/icons";
 import { MSG } from "../shared/messages";
 import type { ParkedVideo } from "../shared/types";
 import { parkedVideoIds, parkToastMessage, withoutPendingIds } from "../shared/parked-set";
+import {
+	runtimeAvailable,
+	sendRuntimeMessage,
+	sendRuntimeMessageAsync,
+} from "../shared/runtime";
+import {
+	chooseWatchButtonMode,
+	fitsWatchButtonInActionRow,
+	resolveShortsActionRail,
+	resolveWatchActionRow,
+	resolveWatchButtonTextColor,
+	type WatchButtonMode,
+	type WatchPageMountTarget,
+} from "../shared/watch-page-mount";
 
 const PARK_BTN_CLASS = "tubepark-park-btn";
 const PARK_BTN_ATTR = "data-tubepark-video-id";
+const WATCH_BTN_ATTR = "data-tubepark-watch-button";
 const TOAST_ID = "tubepark-toast";
 const PARK_ICON_SIZE = 16;
+const WATCH_BTN_ICON_SIZE = 18;
 
 /**
  * Render a Phosphor icon from shared `icons.ts` path data as inline SVG —
@@ -83,6 +99,11 @@ function showParkResult(
 const CARD_SELECTOR = YOUTUBE_VIDEO_CARD_SELECTORS.join(",");
 const PARK_BTN_SIZE = 28;
 const WATCH_BTN_CLASS = "tubepark-watch-park-btn";
+const WATCH_BTN_COMPACT_CLASS = "tubepark-watch-park-btn-compact";
+const WATCH_BTN_HIDDEN_CLASS = "tubepark-watch-park-btn-hidden";
+const WATCH_BTN_SHORTS_CLASS = "tubepark-watch-park-btn-shorts";
+const WATCH_BTN_ICON_WIDTH = 44;
+const WATCH_BTN_REQUIRED_HEIGHT = 44;
 
 /**
  * A single floating park button, portaled to <body> and positioned over whichever
@@ -140,7 +161,7 @@ class FloatingParkButton {
 	}
 
 	private syncParkedIds = async () => {
-		const state = await chrome.runtime.sendMessage({ type: MSG.GET_QUEUE });
+		const state = await sendRuntimeMessageAsync<{ queue?: ParkedVideo[] }>({ type: MSG.GET_QUEUE });
 		this.setParkedIds(parkedVideoIds(state?.queue ?? []));
 	};
 
@@ -224,20 +245,28 @@ class FloatingParkButton {
 		this.activeMeta = null;
 	}
 
+	/** Tear down DOM + page listeners when WXT invalidates this script
+	 * (extension reload / newer script started in dev). */
+	dispose() {
+		this.btn.remove();
+		document.removeEventListener("pointermove", this.onPointerMove);
+		window.removeEventListener("scroll", this.onScroll);
+	}
+
 	private onClick = (e: MouseEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
 		const meta = this.activeMeta;
 		if (!meta) return;
-		if (typeof chrome === "undefined" || !chrome.runtime) return;
+		if (!runtimeAvailable()) return;
 
 		if (this.parkedIds.has(meta.videoId)) {
 			this.parkedIds.delete(meta.videoId);
 			this.renderState();
-			chrome.runtime.sendMessage(
+			sendRuntimeMessage(
 				{ type: MSG.PENDING_REMOVE, ids: [meta.videoId] },
 				() => showToast("Removed", "success", () => {
-					chrome.runtime.sendMessage({ type: MSG.CANCEL_REMOVE }, () => void this.syncParkedIds());
+					sendRuntimeMessage({ type: MSG.CANCEL_REMOVE }, () => void this.syncParkedIds());
 				}),
 			);
 			return;
@@ -252,7 +281,7 @@ class FloatingParkButton {
 		};
 
 		this.btn.innerHTML = svgMarkup("clock");
-		chrome.runtime.sendMessage(
+		sendRuntimeMessage(
 			{ type: "PARK_VIDEO_REQUEST", payload },
 			(result) => {
 				if (result?.success) {
@@ -299,36 +328,61 @@ function onLocationChange(cb: () => void): () => void {
 	};
 }
 
+type WatchPagePlacement = "watch" | "shorts";
+
+function isWatchPagePath(pathname: string): boolean {
+	return pathname === "/watch" || pathname === "/watch/";
+}
+
+function isShortsPagePath(pathname: string): boolean {
+	return pathname.startsWith("/shorts/");
+}
+
 /**
- * An always-visible "Park & close" button for the YouTube watch page (and
- * Shorts), portaled to <body> and fixed to the top-right of the viewport.
+ * Park-and-close control for the main video. The button is mounted into
+ * YouTube's own action row (or Shorts action rail) so it participates in the
+ * layout instead of painting over live-chat/player controls.
  *
- * Sibling to `FloatingParkButton` (which park-onlys hovered sidebar cards). This
- * one captures the MAIN video — including a `resumeAt` from the live <video> at
- * click time — and closes the tab via a background relay (content scripts
- * cannot call chrome.tabs.*). One click, no confirm, no undo: the queue +
- * resumeAt is the safety net (CONTEXT.md "zero-decision park").
- *
- * Nol DOM coupling: viewport-fixed, so it survives YouTube's DOM churn the same
- * way FloatingParkButton does. SPA navigation is watched via `onLocationChange`
- * so the button re-resolves its videoId + parked-indicator without a reload.
+ * The placement resolver is deliberately isolated in `watch-page-mount.ts`:
+ * YouTube's DOM is an integration seam, while capture and click semantics stay
+ * independent. A MutationObserver retries the mount after SPA rerenders; when
+ * no native mount exists, the button stays absent rather than becoming a
+ * viewport overlay.
  */
 class WatchPageParkButton {
 	private readonly btn: HTMLButtonElement;
 	private parkedIds = new Set<string>();
 	private currentVideoId: string | null = null;
+	private placement: WatchPagePlacement | null = null;
+	private mountTarget: WatchPageMountTarget | null = null;
+	private refreshPending = false;
+	private observer: MutationObserver | null = null;
+	private stopLocationWatch: (() => void) | null = null;
 
 	constructor() {
 		const btn = document.createElement("button");
 		btn.className = WATCH_BTN_CLASS;
 		btn.type = "button";
-		btn.innerHTML = `${svgMarkup("pin")}<span class="tubepark-watch-park-label">Park &amp; close</span>`;
+		btn.setAttribute(WATCH_BTN_ATTR, "true");
+		btn.innerHTML = `<span class="tubepark-watch-park-icon">${svgMarkup("pin", WATCH_BTN_ICON_SIZE)}</span><span class="tubepark-watch-park-label">Park &amp; close</span>`;
+		btn.setAttribute("aria-label", "Park to TubePark and close this tab");
+		btn.title = "Park to TubePark & close this tab";
 		btn.addEventListener("click", this.onClick);
-		document.body.appendChild(btn);
 		this.btn = btn;
 		void this.syncParkedIds();
 		this.refresh();
-		onLocationChange(() => this.refresh());
+		this.stopLocationWatch = onLocationChange(this.scheduleRefresh);
+		window.addEventListener("resize", this.scheduleRefresh, { passive: true });
+
+		if (document.body && typeof MutationObserver !== "undefined") {
+			this.observer = new MutationObserver(this.onDomMutation);
+			this.observer.observe(document.body, {
+				childList: true,
+				subtree: true,
+				attributes: true,
+				attributeFilter: ["class", "hidden", "style"],
+			});
+		}
 	}
 
 	setParkedIds(ids: Set<string>) {
@@ -337,50 +391,192 @@ class WatchPageParkButton {
 	}
 
 	private syncParkedIds = async () => {
-		const state = await chrome.runtime.sendMessage({ type: MSG.GET_QUEUE });
+		const state = await sendRuntimeMessageAsync<{ queue?: ParkedVideo[] }>({ type: MSG.GET_QUEUE });
 		this.setParkedIds(parkedVideoIds(state?.queue ?? []));
 	};
 
 	private refresh = () => {
 		const videoId = extractYouTubeVideoId(location.href);
-		if (!videoId) {
+		const pathname = location.pathname;
+		const placement: WatchPagePlacement | null = isShortsPagePath(pathname)
+			? "shorts"
+			: isWatchPagePath(pathname)
+				? "watch"
+				: null;
+
+		if (!videoId || !placement) {
 			this.currentVideoId = null;
-			this.hide();
+			this.unmount();
 			return;
 		}
+
 		this.currentVideoId = videoId;
 		this.btn.setAttribute(PARK_BTN_ATTR, videoId);
 		this.renderState();
-		this.show();
+
+		const target = placement === "shorts"
+			? resolveShortsActionRail(document)
+			: resolveWatchActionRow(document);
+		if (!target) {
+			this.unmount();
+			return;
+		}
+
+		this.mount(target, placement);
+		this.applyMode();
 	};
 
 	private renderState() {
 		const parked = this.currentVideoId !== null && this.parkedIds.has(this.currentVideoId);
+		const icon = parked ? "pinFill" : "pin";
+		if (this.btn.dataset.tubeparkIcon !== icon) {
+			this.btn.innerHTML = `<span class="tubepark-watch-park-icon">${svgMarkup(icon, WATCH_BTN_ICON_SIZE)}</span><span class="tubepark-watch-park-label">Park &amp; close</span>`;
+			this.btn.dataset.tubeparkIcon = icon;
+		}
 		this.btn.classList.toggle("tubepark-watch-park-btn-parked", parked);
-		this.btn.title = parked
-			? "Already in TubePark — click to park & close this tab"
-			: "Park to TubePark & close this tab";
+		const label = parked
+			? "Already in TubePark — click to park and close this tab"
+			: "Park to TubePark and close this tab";
+		this.btn.title = label;
+		this.btn.setAttribute("aria-label", label);
 	}
 
-	private show() {
-		this.btn.style.display = "inline-flex";
+	private scheduleRefresh = () => {
+		if (this.refreshPending) return;
+		this.refreshPending = true;
+		requestAnimationFrame(() => {
+			this.refreshPending = false;
+			this.refresh();
+		});
 	}
 
-	private hide() {
+	private onDomMutation = (mutations: MutationRecord[]) => {
+		// The mode measurement temporarily toggles this button's inline display;
+		// those self-mutations must not schedule an endless refresh loop. Changes
+		// whose target is inside the button are likewise local rendering work.
+		if (mutations.every(({ target }) => target === this.btn || this.btn.contains(target))) return;
+		this.scheduleRefresh();
+	};
+
+	private mount(target: WatchPageMountTarget, placement: WatchPagePlacement) {
+		const isInTarget = this.btn.parentElement === target.container;
+		const next = this.btn.nextElementSibling;
+		const insertionChanged = target.before
+			? next !== target.before
+			: next !== null;
+		if (!isInTarget || insertionChanged) {
+			target.container.insertBefore(this.btn, target.before);
+		}
+		this.mountTarget = target;
+		this.placement = placement;
+		this.btn.classList.toggle(WATCH_BTN_SHORTS_CLASS, placement === "shorts");
+	}
+
+	private unmount() {
+		this.btn.remove();
+		this.mountTarget = null;
+		this.placement = null;
+		this.setMode("hidden");
+	}
+
+	/** Tear down DOM, page listeners, and the MutationObserver when WXT
+	 * invalidates this script (extension reload / newer script started in dev). */
+	dispose() {
+		this.stopLocationWatch?.();
+		this.observer?.disconnect();
+		window.removeEventListener("resize", this.scheduleRefresh);
+		this.btn.remove();
+	}
+
+	private setMode(mode: WatchButtonMode) {
+		this.btn.classList.toggle(WATCH_BTN_COMPACT_CLASS, mode === "icon");
+		this.btn.classList.toggle(WATCH_BTN_HIDDEN_CLASS, mode === "hidden");
+		this.btn.dataset.tubeparkMode = mode;
+	}
+
+	private applyMode() {
+		if (!this.mountTarget || !this.placement || !this.btn.isConnected) return;
+		this.btn.style.color = resolveWatchButtonTextColor(
+			getComputedStyle(this.mountTarget.container).color,
+		);
+
+		if (this.placement === "shorts") {
+			this.setMode("icon");
+			const rect = this.btn.getBoundingClientRect();
+			const safeTop = 56;
+			const safeBottom = window.innerHeight - 8;
+			const fitsVertically = rect.height >= WATCH_BTN_REQUIRED_HEIGHT
+				&& rect.top >= safeTop
+				&& rect.bottom <= safeBottom;
+			const mode = chooseWatchButtonMode({
+				availableWidth: rect.width,
+				// Shorts is always icon-only; make the labeled branch intentionally
+				// unavailable while still using the shared fit decision for hidden.
+				fullWidth: WATCH_BTN_ICON_WIDTH + 1,
+				iconWidth: WATCH_BTN_ICON_WIDTH,
+				availableHeight: fitsVertically ? WATCH_BTN_REQUIRED_HEIGHT : 0,
+				requiredHeight: WATCH_BTN_REQUIRED_HEIGHT,
+			});
+			this.setMode(mode);
+			return;
+		}
+
+		this.setMode("full");
+		const fullWidth = Math.max(WATCH_BTN_ICON_WIDTH, Math.ceil(this.btn.getBoundingClientRect().width));
+		const availableWidth = this.measureWatchAvailableWidth();
+		this.setMode("icon");
+		const iconWidth = Math.max(WATCH_BTN_ICON_WIDTH, Math.ceil(this.btn.getBoundingClientRect().width));
+		const mode = chooseWatchButtonMode({ availableWidth, fullWidth, iconWidth });
+		this.setMode(mode);
+		if (mode !== "hidden" && !this.fitsWatchActionRow()) {
+			this.setMode(mode === "full" ? "icon" : "hidden");
+			if (mode === "full" && !this.fitsWatchActionRow()) this.setMode("hidden");
+		}
+	}
+
+	private measureWatchAvailableWidth(): number {
+		if (!this.mountTarget) return 0;
+		const container = this.mountTarget.container;
+		const previousDisplay = this.btn.style.display;
 		this.btn.style.display = "none";
+		const containerRect = container.getBoundingClientRect();
+		const rects = Array.from(container.children)
+			.filter((child) => child !== this.btn)
+			.map((child) => child.getBoundingClientRect())
+			.filter((rect) => rect.width > 0 && rect.height > 0);
+		this.btn.style.display = previousDisplay;
+		if (rects.length === 0) return containerRect.width;
+		const nativeLeft = Math.min(...rects.map((rect) => rect.left));
+		const nativeRight = Math.max(...rects.map((rect) => rect.right));
+		return Math.max(0, containerRect.width - (nativeRight - nativeLeft));
+	}
+
+	private fitsWatchActionRow(): boolean {
+		if (!this.mountTarget) return false;
+		const containerRect = this.mountTarget.container.getBoundingClientRect();
+		const buttonRect = this.btn.getBoundingClientRect();
+		if (buttonRect.width <= 0 || buttonRect.height <= 0) return false;
+		const siblingRects = Array.from(this.mountTarget.container.children)
+			.filter((child) => child !== this.btn)
+			.map((child) => child.getBoundingClientRect())
+			.filter((rect) => rect.width > 0 && rect.height > 0);
+		return fitsWatchButtonInActionRow(buttonRect, containerRect, siblingRects);
 	}
 
 	private onClick = (e: MouseEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
 		if (!this.currentVideoId) return;
-		if (typeof chrome === "undefined" || !chrome.runtime) return;
+		if (!runtimeAvailable()) return;
 		// Build the payload at click time so `resumeAt` reflects the current
 		// playback position (the user may have been watching since the last
 		// refresh). Pure helper — unit-tested in capture-predicates.
 		const payload = buildWatchPagePayload(location.href, document);
 		if (!payload) return;
-		chrome.runtime.sendMessage(
+		// sendRuntimeMessage swallows the "Extension context invalidated" throw a
+		// stale script hits after the extension is reloaded/updated — without it
+		// this click would die silently before the park message is ever sent.
+		sendRuntimeMessage(
 			{ type: MSG.PARK_AND_CLOSE_TAB, payload },
 			(result) => {
 				// The tab is about to be closed on success/duplicate (background
@@ -388,7 +584,6 @@ class WatchPageParkButton {
 				// surface it so the user knows the park was rejected. Intentionally
 				// NOT showParkResult: success/duplicate toasts would never render
 				// (the content script dies with the tab) — see showParkResult doc.
-				if (chrome.runtime.lastError) return;
 				if (result?.full) showToast(QUEUE_FULL_MSG, "full");
 			},
 		);
@@ -462,77 +657,98 @@ function injectToastStyles() {
     }
 
     /*
-     * Watch-page "Park & close" pill — portaled to <body>, fixed top-right of
-     * the viewport, below YouTube's topbar. Always-visible on /watch + /shorts
-     * (WatchPageParkButton toggles display). Same max z-index as the floating
-     * button so it escapes YouTube's stacking contexts. A subtle yellow dot
-     * (::after) marks already-parked videos — a cosmetic indicator, NOT a
-     * toggle (click always park+close; F10-5).
+     * Watch-page "Park & close" is an inline action-row control. It must share
+     * YouTube's layout so live-chat/player controls remain clickable. The
+     * resolver mounts it before YouTube's overflow menu and switches it to the
+     * compact icon when the row has less space. If even the icon cannot fit,
+     * the control is hidden; it never becomes a viewport overlay.
      */
     .${WATCH_BTN_CLASS} {
-      position: fixed;
-      top: 70px;
-      right: 16px;
-      z-index: 2147483647;
-      display: none;
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
       align-items: center;
+      justify-content: center;
       gap: 6px;
-      padding: 7px 12px 7px 9px;
-      border: 1px solid #267f3b;
-      border-radius: 999px;
-      background: rgba(0, 0, 0, 0.78);
-      backdrop-filter: blur(6px);
-      color: #fff;
+      min-width: ${WATCH_BTN_ICON_WIDTH}px;
+      width: auto;
+      height: ${WATCH_BTN_REQUIRED_HEIGHT}px;
+      margin-inline-start: 4px;
+      padding: 0 12px;
+      box-sizing: border-box;
+      border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+      border-radius: 18px;
+      background: color-mix(in srgb, currentColor 10%, transparent);
+      color: inherit;
       font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       cursor: pointer;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease, opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
-      opacity: 1;
+      white-space: nowrap;
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+      vertical-align: middle;
+    }
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_COMPACT_CLASS},
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS} {
+      flex: 0 0 ${WATCH_BTN_ICON_WIDTH}px;
+      width: ${WATCH_BTN_ICON_WIDTH}px;
+      padding: 0;
+      margin-inline-start: 4px;
+    }
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_HIDDEN_CLASS} {
+      display: none !important;
+    }
+    .${WATCH_BTN_CLASS} .tubepark-watch-park-icon {
+      display: inline-flex;
+      flex: 0 0 auto;
+      color: #3b9b55;
+    }
+    .${WATCH_BTN_CLASS}.tubepark-watch-park-btn-parked .tubepark-watch-park-icon {
+      color: #d7a500;
     }
     .${WATCH_BTN_CLASS}:hover {
-      background: rgba(0, 0, 0, 0.9);
+      background: color-mix(in srgb, currentColor 18%, transparent);
+      border-color: #3b9b55;
+    }
+    .${WATCH_BTN_CLASS}:focus-visible {
+      outline: 2px solid var(--yt-spec-call-to-action, #3b9b55);
+      outline-offset: 2px;
     }
     .${WATCH_BTN_CLASS}:active {
-      transform: scale(0.97);
+      background: color-mix(in srgb, currentColor 26%, transparent);
     }
     .${WATCH_BTN_CLASS} .tubepark-watch-park-label {
       white-space: nowrap;
     }
-    /* Identity-green border mirrors --tp-accent (tokens.css): #267f3b light,
-     * #51c86c dark — so the pill reads against YouTube's dark bg instead of
-     * camouflaging, and stays on-brand with the popup/side-panel accent. */
-    @media (prefers-color-scheme: dark) {
-      .${WATCH_BTN_CLASS} { border-color: #51c86c; }
-    }
-    .${WATCH_BTN_CLASS}.tubepark-watch-park-btn-parked::after {
-      content: "";
-      width: 6px;
-      height: 6px;
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS} {
+      margin-inline-start: 0;
       border-radius: 50%;
-      background: #facc15;
-      margin-left: 2px;
+      background: color-mix(in srgb, currentColor 10%, transparent);
     }
-
-    /* Fade the pill in on first show (display:none -> inline-flex). Exit is
-     * instant — the pill vanishes on SPA nav off /watch. */
-    @starting-style {
-      .${WATCH_BTN_CLASS} { opacity: 0; }
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS} .tubepark-watch-park-label {
+      display: none;
+    }
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS}:hover {
+      background: color-mix(in srgb, currentColor 18%, transparent);
+    }
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS}:focus-visible {
+      outline-offset: 3px;
+    }
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS}.tubepark-watch-park-btn-parked {
+      border-color: transparent;
     }
 
     /* Hover motion is pointer-gated so a touch tap can't fire a false scale. */
     @media (hover: hover) and (pointer: fine) {
       .${PARK_BTN_CLASS}:hover { transform: scale(1.05); }
-      .${WATCH_BTN_CLASS}:hover { transform: scale(1.04); }
     }
 
     /* Reduced motion: keep opacity/color, drop all transform movement. */
     @media (prefers-reduced-motion: reduce) {
       .tubepark-toast { transform: none; transition: opacity 150ms ease; }
-      .${PARK_BTN_CLASS}, .${WATCH_BTN_CLASS} {
-        transition: background 150ms ease, border-color 150ms ease, opacity 160ms ease;
+      .${PARK_BTN_CLASS} {
+        transition: background 150ms ease, border-color 150ms ease;
       }
-      .${PARK_BTN_CLASS}:active,
-      .${WATCH_BTN_CLASS}:active { transform: none; }
+      .${PARK_BTN_CLASS}:active { transform: none; }
+      .${WATCH_BTN_CLASS} { transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
     }
   `;
 
@@ -541,7 +757,7 @@ function injectToastStyles() {
 
 export default defineContentScript({
 	matches: ["*://*.youtube.com/*"],
-	main() {
+	main(ctx) {
 		console.log("[TubePark] Content script loaded on YouTube");
 
 		injectToastStyles();
@@ -556,19 +772,24 @@ export default defineContentScript({
 			floatingButton.setParkedIds(ids);
 			watchButton.setParkedIds(ids);
 		};
-		chrome.storage?.onChanged.addListener(() => {
-			chrome.runtime.sendMessage({ type: MSG.GET_QUEUE }, (state) => {
+		const onStorageChanged = () => {
+			sendRuntimeMessage({ type: MSG.GET_QUEUE }, (state) => {
 				syncAllButtons(parkedVideoIds(state?.queue ?? []));
 			});
-		});
+		};
+		chrome.storage?.onChanged.addListener(onStorageChanged);
 
 		// Handle popup tab-meta reads (G4+F4) and context-menu park requests.
-		chrome.runtime?.onMessage.addListener((message, _sender, sendResponse) => {
+		const onMessage = (
+			message: any,
+			_sender: chrome.runtime.MessageSender,
+			sendResponse: (response?: any) => void,
+		) => {
 			if (message?.type === MSG.PENDING_REMOVAL_CHANGED) {
 				const pendingIds = Array.isArray(message.pendingIds) ? message.pendingIds : [];
 				syncAllButtons(withoutPendingIds(floatingButton.getParkedIds(), pendingIds));
 				if (pendingIds.length === 0) {
-					chrome.runtime.sendMessage({ type: MSG.GET_QUEUE }, (state) => {
+					sendRuntimeMessage({ type: MSG.GET_QUEUE }, (state) => {
 						syncAllButtons(parkedVideoIds(state?.queue ?? []));
 					});
 				}
@@ -623,7 +844,7 @@ export default defineContentScript({
 						durationSec: meta.durationSec,
 					};
 
-					chrome.runtime.sendMessage(
+					sendRuntimeMessage(
 						{ type: MSG.PARK_VIDEO_REQUEST, payload },
 						(result) => {
 							showParkResult(result, meta!.title);
@@ -634,6 +855,24 @@ export default defineContentScript({
 				return true;
 			}
 			return false;
+		};
+		chrome.runtime?.onMessage.addListener(onMessage);
+
+		// When WXT invalidates this script (extension reloaded, or a newer script
+		// started in dev), tear down everything we added to the page. A stale
+		// button is worse than none: with the context dead every chrome.* call
+		// throws, so a leftover "Park & close" silently does nothing on click.
+		// runtimeAvailable() in every click path is the backstop for the
+		// browser-level invalidation WXT cannot observe.
+		ctx.onInvalidated(() => {
+			try {
+				floatingButton.dispose();
+				watchButton.dispose();
+				chrome.storage?.onChanged.removeListener(onStorageChanged);
+				chrome.runtime?.onMessage.removeListener(onMessage);
+			} catch {
+				/* context already gone — nothing left to clean up */
+			}
 		});
 	},
 });
