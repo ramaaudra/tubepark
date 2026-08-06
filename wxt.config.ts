@@ -5,7 +5,7 @@ export default defineConfig({
 	modules: ["@wxt-dev/module-svelte"],
 	manifest: {
 		name: "TubePark — Frictionless Visual Scratchpad for YouTube",
-		version: "0.2.1",
+		version: "0.2.2",
 		description:
 			"Convert a horizontal tab-bar mess into a vertical, thumbnail-rich queue.",
 		permissions: ["storage", "contextMenus", "tabs", "sidePanel"],
