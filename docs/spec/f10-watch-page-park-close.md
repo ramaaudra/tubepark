@@ -23,15 +23,19 @@ deteksi "video mana yang sedang diputar" tanpa reload.
 
 ## Solution
 
-Component baru `WatchPageParkButton` di `src/entrypoints/content.ts`, button
-portaled ke `<body>`, `position: fixed` pojok kanan-atas viewport (di bawah
-topbar YouTube), always-visible, scoped ke `/watch?v=` + `/shorts/{id}`. Klik =
-park (dengan `resumeAt` dari `readMainVideoCurrentTime` lokal — tanpa round-trip)
-+ relay ke background untuk `chrome.tabs.remove(sender.tab.id)`. Nol coupling ke
-DOM YouTube (arsitektur sama `FloatingParkButton`). Coexist dgn `FloatingParkButton`
-yang tetap park sidebar recs. 1-klik langsung, no confirm, no undo; queue +
-`resumeAt` = safety net. Parked-state ditampilkan subtle indicator (bukan toggle).
-Detect SPA navigation untuk re-resolve `videoId`/state + toggle visibility.
+Component `WatchPageParkButton` di `src/entrypoints/content.ts` dimount inline ke
+`ytd-watch-metadata ytd-menu-renderer`, tepat sebelum kontrol overflow (tiga titik),
+pada `/watch?v=`. Pada `/shorts/{id}`, component yang sama memakai adapter rail
+terpisah dan dimount setelah Share, sebelum sound/pivot, sebagai ikon. Klik = park
+(dengan `resumeAt` dari `readMainVideoCurrentTime` lokal — tanpa round-trip) +
+relay ke background untuk `chrome.tabs.remove(sender.tab.id)`. Selector YouTube
+diisolasi di `src/shared/watch-page-mount.ts`; bila anchor belum ada atau tidak
+menyediakan ruang, button disembunyikan dan aksi yang sama tersedia melalui
+overflow menu tiga titik native YouTube; button di-remount saat DOM siap. Tidak
+ada floating fallback. Coexist dgn `FloatingParkButton` yang tetap park sidebar
+recs. 1-klik langsung, no confirm, no undo; queue + `resumeAt` = safety net.
+Parked-state ditampilkan lewat ikon pin terisi/aksen, bukan toggle. Detect SPA,
+MutationObserver, dan resize untuk re-resolve `videoId`/state/mount.
 
 ## User Stories
 
@@ -40,8 +44,8 @@ Detect SPA navigation untuk re-resolve `videoId`/state + toggle visibility.
    extension popup.
 2. As a watcher, I want the button to capture my playback position, so that
    resuming from the queue continues where I left off (mid-watch park).
-3. As a watcher, I want the button visible without hovering, so that I can find it
-   instantly when I decide I'm done.
+3. As a watcher, I want the button integrated into the action row without
+   obstructing YouTube controls, so that I can find it when I decide I'm done.
 4. As a watcher, I want the button to also appear on Shorts, so that a Short I
    landed on via a link can be parked+closed just like a regular video.
 5. As a watcher, I want a subtle indicator when the current video is already in my
@@ -59,28 +63,37 @@ Detect SPA navigation untuk re-resolve `videoId`/state + toggle visibility.
   (`popup/App.svelte:116`): park + `resumeAt` + close tab. Content script relay ke
   background (gak bisa `chrome.tabs.*` langsung); tab content-script hancur
   setelah message terkirim → aman. ⚠️ Wajib `sender.tab.id` di listener background.
-- **F10-2 — Floating portaled ke `<body>`, `position: fixed`, always-visible.**
-  Arsitektur sama `FloatingParkButton` (`content.ts:85`); nol DOM coupling.
-  Full styling control; discoverable tanpa hover.
+- **F10-2 — Inline mount dengan adapter terisolasi, tanpa fixed fallback.**
+  Pada `/watch`, resolver `src/shared/watch-page-mount.ts` mencari
+  `ytd-watch-metadata ytd-menu-renderer` dan menyisipkan button sebelum kontrol
+  overflow. Pada Shorts, resolver mencari `reel-action-bar-view-model` dan
+  menyisipkan icon-only sebelum pivot/sound. Jika anchor atau ruang tidak ada,
+  button disembunyikan; pada watch action tersedia melalui item di overflow
+  menu tiga titik native; MutationObserver mencoba lagi. Tidak ada
+  `position: fixed` fallback karena overlay terbukti menutupi live-chat X.
 - **F10-3 — Component baru terpisah, coexist dgn `FloatingParkButton`.**
   `WatchPageParkButton` (video utama: park+close+`resumeAt`) + `FloatingParkButton`
-  tetap (sidebar recs: park-only). Dua button, dua niat. ⚠️ Di watch page dua
-  button bisa tampil bersama (utama always-visible pojok kanan-atas, sidebar
-  hover di kartu) — diterima, niat + posisi berbeda.
+  tetap (sidebar recs: park-only). Dua button, dua niat dan dua mount seam; pada
+  watch page keduanya boleh tampil tanpa saling menutupi.
 - **F10-4 — 1-klik langsung, no confirm, no undo.** Konsisten popup + ethos
   "zero-decision park". Queue+`resumeAt` = safety net. ⛔ Undo toast in-page
   mustahil — content script hancur bersama tab.
 - **F10-5 — Always "ensure-parked + close"; indikator parked subtle (bukan
-  toggle).** Klik selalu close tab terlepas dari status parked; tampil badge/dot
-  kecil kalau sudah parked. **Tidak pernah unpark** dari sini (lawan
+  toggle).** Klik selalu close tab terlepas dari status parked; ikon pin menjadi
+  terisi/beraksen jika sudah parked. **Tidak pernah unpark** dari sini (lawan
   `FloatingParkButton` yang toggle — tapi itu park-only tanpa close).
-- **F10-6 — Scope `/watch?v=` + `/shorts/{id}`.** Viewport-fixed → nol DOM work
-  extra untuk Shorts. Capture sudah handle Shorts (`extractYouTubeVideoId`
-  `capture-predicates.ts:39` kenal `/shorts/`; `readMainVideoCurrentTime` `:226`
-  cari `<video>` terbesar).
-- **F10-7 — Posisi `fixed; top: ~70px; right: 16px`.** Pill icon + label
-  "Park & close". Bersih dari topbar, jauh dari bottom controls, tidak overlap
-  rekomendasi.
+- **F10-6 — Scope `/watch?v=` + `/shorts/{id}` dengan mount berbeda.** Watch
+  memakai action row; Shorts memakai rail vertikal icon-only setelah Share,
+  sebelum sound/pivot. Capture tetap memakai `extractYouTubeVideoId`
+  (`capture-predicates.ts:39`) dan `readMainVideoCurrentTime` terbesar.
+- **F10-7 — Mode responsif berdasarkan ruang aktual.** Action row menampilkan
+  pill netral berlabel “Park & close” bila muat, turun ke ikon 44px bila label
+  tidak muat, lalu hidden bila ikon pun akan overflow atau berpotensi overlap dengan
+  kontrol native. Saat hidden di watch, item “Park & close tab” ditambahkan ke
+  popup overflow native setelah user membuka trigger tiga titik. Warna teks
+  mengikuti warna action row YouTube (dengan fallback aman untuk dark mode), bukan
+  asumsi CSS variable global. Shorts selalu ikon dan hidden bila tidak muat secara
+  vertikal. Tidak memakai breakpoint viewport atau overlay global.
 - **F10-8 — Pesan baru `MSG.PARK_AND_CLOSE_TAB`** (`src/shared/messages.ts:11`):
   ```ts
   /** Content script → background: park one video AND close the sender's tab.
@@ -103,16 +116,14 @@ Detect SPA navigation untuk re-resolve `videoId`/state + toggle visibility.
   `resumeAt = readMainVideoCurrentTime(document)` (`:226`) jika `> 0` (F4: tak
   simpan `t=0`). ⚠️ Lebih murah daripada popup (popup butuh `GET_TAB_META`
   round-trip `popup/App.svelte:55`); content script IS pembaca DOM.
-- **F10-10 — Sinkron `parkedIds` + SPA navigation.** Pakai pola sinkron
+- **F10-10 — Sinkron `parkedIds` + SPA/DOM/resize mount.** Pakai pola sinkron
   `FloatingParkButton` (`content.ts` `syncParkedIds` + `storage.onChanged` +
   `PENDING_REMOVAL_CHANGED`) untuk render indikator parked. Reuse
-  `parkedVideoIds` (`parked-set.ts`) + `withoutPendingIds`. ⚠️ YouTube SPA:
-  pindah video tak reload content script. Listener nav (rekomendasi:
-  `yt-navigate-finish` + `popstate`, fallback poll `location.href`) → re-resolve
-  `videoId`/`title`/`channel`/`currentTime`/`parked-state` + toggle visibility
-  (hide di home/search/channel via `isYouTubeWatchUrl` `capture-predicates.ts:67`).
-  ✅ Mekanisme terimplementasi: `onLocationChange` = `yt-navigate-finish` +
-  `popstate` + poll `location.href` 1s (idempotent) — lihat Verification.
+  `parkedVideoIds` (`parked-set.ts`) + `withoutPendingIds`. YouTube SPA tidak
+  reload content script, jadi `yt-navigate-finish` + `popstate` + poll URL
+  me-resolve route; MutationObserver menangkap action row/rail yang dibuat ulang;
+  resize menguji ulang mode label/icon/hidden dan listener overflow trigger ikut
+  dipasang ulang saat YouTube mengganti kontrol native.
 - **F10-11 — Toast feedback.** Pada `full` (park ditolak, tab tidak di-close):
   `showToast("Queue full (200/200) — remove old videos first.", "full")`
   (`content.ts:37`, sama `FloatingParkButton` onClick `:249`). Pada
@@ -121,11 +132,16 @@ Detect SPA navigation untuk re-resolve `videoId`/state + toggle visibility.
   panel). Konsisten dgn popup `handleParkCurrentTab` yang `launchChip` lalu close.
 - **Ditolak: extend `PARK_VIDEO_REQUEST` dgn flag `closeTab`** — dua semantics
   (close vs no-close) di satu type membingungkan kontrak; type baru lebih grep-able
-  (konvensi `messages.ts`). Ditolak: inject ke action bar YouTube — coupling churn
-  (F10-2). Ditolak: undo close — content script hancur, mustahil (F10-4).
+  (konvensi `messages.ts`). Ditolak: fixed viewport overlay — menutupi kontrol
+  live chat. Ditolak: undo close — content script hancur, mustahil (F10-4).
 
 ## Testing Decisions
 
+- **Mount resolver unit test (terimplementasi):** `src/shared/watch-page-mount.test.ts`
+  mengunci insertion sebelum overflow watch, sebelum pivot Shorts, idempotensi
+  terhadap button TubePark yang sudah ada, mode label → ikon → hidden dari rect
+  kandidat aktual, first-line/wrap guard, viewport guard, overlap guard, dan
+  fallback warna native row.
 - **Unit test (terimplementasi):** capture di-faktor ke helper murni
   `buildWatchPagePayload(url, doc, now?)` (`capture-predicates.ts`) →
   `ParkedVideo | null`. 7 test di `capture-predicates.test.ts` pakai inline
@@ -141,14 +157,16 @@ Detect SPA navigation untuk re-resolve `videoId`/state + toggle visibility.
   Shared `__fixtures__/watch-page.html` adalah artifact cross-feature G4/F4/F10
   yg menunggu capture live; ketika dibuat, semua konsumen otomatis ter-cover.
   ⚠️ Bukan blokir F10 — logika selector + `<video>` sudah diuji sintetik.
-- **Integration (manual):** (a) watch page → klik → park + tab close + item di
+- **Integration (browser langsung):** (a) watch page → klik → park + tab close + item di
   queue dgn `resumeAt`; (b) mid-watch → `resumeAt` > 0; (c) video sudah di queue →
   indikator parked tampil, klik → tab close (item tetap, no duplikat); (d) queue
   full → toast "Queue full", tab tidak close; (e) Shorts → klik → park+close; (f)
   SPA nav `/watch→/watch` → button re-resolve videoId + parked-state; (g) navigasi
   ke home → button hide; (h) sidebar recs hover → `FloatingParkButton` tetap park
-  (coexist).
-- **Regression guard:** `capture-predicates.test.ts` (23 test) tak tersentuh
+  (coexist); (i) live chat terbuka → chat X tetap di luar rect button. Ulangi pada
+  1440×900, 1280×720, 1024×768, 768×720, 480×800 untuk watch dan
+  1280×720, 1024×600, 480×800 untuk Shorts; simpan screenshot + DOM rect.
+- **Capture regression guard:** `capture-predicates.test.ts` (23 test) tak tersentuh
   (reuse fungsi). `storage.test.ts` tak tersentuh (reuse `tryParkWithPending`).
 
 ## Dependencies
@@ -162,25 +180,21 @@ Detect SPA navigation untuk re-resolve `videoId`/state + toggle visibility.
 - **Korelasi G4/F4 fixture:** `watch-page.html` dibutuhkan bersama (selector
   channel + `<video>` diverifikasi sekali untuk G4/F4/F10).
 
-## Verification needed before implementation
+## Verification status
 
 Post-implementation status (kode = source of truth):
 
-1. ✅ **Deteksi navigasi SPA** (terimplementasi) — `onLocationChange` di
-   `content.ts` pakai 3 sinyal idempotent: `yt-navigate-finish` (event YouTube),
-   `popstate` (back/forward), + poll `location.href` 1 detik (safety net utk
-   transisi yg event lewat). `refresh()` re-resolve dari `location.href` jadi
-   hanya re-render saat benar berubah. ⚠️ Konfirmasi live: `yt-navigate-finish`
-   menyala andal utk `/watch↔/shorts` (poll menutup celah bila tidak).
+1. ✅ **Deteksi SPA + mount ulang** — `onLocationChange` di `content.ts` memakai
+   `yt-navigate-finish`, `popstate`, dan poll URL 1 detik; MutationObserver
+   menangkap action row/rail yang dirender ulang dan resize menguji ulang mode.
 2. ✅ **`sender.tab.id`** (terimplementasi) — listener background rename
    `_sender`→`sender`; `chrome.tabs.remove(sender.tab?.id)` di-guard
    `typeof tabId === "number"`. Content-script sender selalu punya `tab`.
-3. ⚠️ **`readMainVideoCurrentTime` di Shorts** — reuse logika F4 (pilih `<video>`
-   terbesar by area); di `/shorts/` player fullscreen = terbesar. Konfirmasi live
-   bahwa itu video konten (bukan ad stub) — belum diverifikasi lapangan.
-4. 🔓 **Posisi `top: 70px`** (terimplementasi fixed) — topbar YouTube tinggi
-   variable (~56px desktop, lebih di mobile); `70px` aman di desktop, 🔓 responsif
-   di viewport sempit (sembunyi/geser?) — follow-up, bukan blokir.
+3. ✅ **Mount resolver + mode** — unit test mengunci insertion point dan
+   label/icon/hidden; browser matrix mengonfirmasi layout aktual.
+4. ✅ **Browser acceptance matrix** — live chat terbuka/tertutup, watch/Shorts,
+   SPA remount, viewport, dan fallback overflow menu pada action row tertekan
+   sudah diverifikasi langsung.
 
 ## References
 

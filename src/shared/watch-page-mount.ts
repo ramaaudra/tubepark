@@ -20,6 +20,12 @@ export interface WatchButtonRect {
 	bottom: number;
 }
 
+export interface WatchButtonLayoutSnapshot {
+	button: WatchButtonRect;
+	container: WatchButtonRect;
+	siblings: WatchButtonRect[];
+}
+
 const TUBEPARK_BUTTON_SELECTOR = "[data-tubepark-watch-button]";
 
 function hasLayout(element: Element): boolean {
@@ -93,6 +99,39 @@ export function fitsWatchButtonInActionRow(
 		return false;
 	}
 	return siblings.every((sibling) => !rectsOverlap(button, sibling));
+}
+
+/** A button counts as on the row's first line when its top aligns with the
+ * container's first line (small padding tolerance) AND it sits at the same
+ * vertical position as at least one native sibling. Catches the wrap case
+ * where the button drops to a second line — the arithmetic
+ * `containerWidth − nativeSpan` can't, because a wrapped button still
+ * doesn't overlap siblings and often stays within the container box. */
+export function isWatchButtonOnFirstLine(
+	button: WatchButtonRect,
+	container: WatchButtonRect,
+	siblings: WatchButtonRect[],
+): boolean {
+	const TOP_TOLERANCE = 10;
+	if (Math.abs(button.top - container.top) > TOP_TOLERANCE) return false;
+	return siblings.some((sibling) => Math.abs(sibling.top - button.top) <= TOP_TOLERANCE);
+}
+
+export function pickWatchButtonModeByLayout(
+	full: WatchButtonLayoutSnapshot,
+	icon: WatchButtonLayoutSnapshot,
+	viewport: WatchButtonRect,
+): WatchButtonMode {
+	const fits = ({ button, container, siblings }: WatchButtonLayoutSnapshot): boolean =>
+		button.right > button.left
+		&& button.bottom > button.top
+		&& button.left >= viewport.left - 1
+		&& button.right <= viewport.right + 1
+		&& isWatchButtonOnFirstLine(button, container, siblings)
+		&& fitsWatchButtonInActionRow(button, container, siblings);
+	if (fits(full)) return "full";
+	if (fits(icon)) return "icon";
+	return "hidden";
 }
 
 export function resolveWatchButtonTextColor(inheritedColor: string | null | undefined): string {

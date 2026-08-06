@@ -22,11 +22,13 @@ import {
 } from "../shared/runtime";
 import {
 	chooseWatchButtonMode,
-	fitsWatchButtonInActionRow,
+	pickWatchButtonModeByLayout,
 	resolveShortsActionRail,
 	resolveWatchActionRow,
 	resolveWatchButtonTextColor,
 	type WatchButtonMode,
+	type WatchButtonLayoutSnapshot,
+	type WatchButtonRect,
 	type WatchPageMountTarget,
 } from "../shared/watch-page-mount";
 
@@ -104,6 +106,10 @@ const WATCH_BTN_HIDDEN_CLASS = "tubepark-watch-park-btn-hidden";
 const WATCH_BTN_SHORTS_CLASS = "tubepark-watch-park-btn-shorts";
 const WATCH_BTN_ICON_WIDTH = 44;
 const WATCH_BTN_REQUIRED_HEIGHT = 44;
+const WATCH_MENU_ITEM_ATTR = "data-tubepark-watch-menu-item";
+/** Time after a click on the watch-page 3-dot trigger during which we treat a
+ * newly opened popup as the watch actions menu (and inject our item into it). */
+const WATCH_MENU_TRIGGER_WINDOW_MS = 1500;
 
 /**
  * A single floating park button, portaled to <body> and positioned over whichever
@@ -358,6 +364,12 @@ class WatchPageParkButton {
 	private refreshPending = false;
 	private observer: MutationObserver | null = null;
 	private stopLocationWatch: (() => void) | null = null;
+	/** Timestamp of the last click on the watch-page "More actions" trigger.
+	 * Used to scope overflow-menu injection to the popup that click opened. */
+	private overflowTriggerClickedAt = 0;
+	/** Element currently listening to for overflow-trigger clicks. Re-attached
+	 * if YouTube replaces the button during a re-render. */
+	private overflowTriggerEl: HTMLElement | null = null;
 
 	constructor() {
 		const btn = document.createElement("button");
@@ -423,6 +435,7 @@ class WatchPageParkButton {
 		}
 
 		this.mount(target, placement);
+		this.attachOverflowTrigger();
 		this.applyMode();
 	};
 
@@ -473,6 +486,8 @@ class WatchPageParkButton {
 	}
 
 	private unmount() {
+		this.detachOverflowTrigger();
+		this.clearOverflowMenuItems();
 		this.btn.remove();
 		this.mountTarget = null;
 		this.placement = null;
@@ -485,6 +500,8 @@ class WatchPageParkButton {
 		this.stopLocationWatch?.();
 		this.observer?.disconnect();
 		window.removeEventListener("resize", this.scheduleRefresh);
+		this.detachOverflowTrigger();
+		this.clearOverflowMenuItems();
 		this.btn.remove();
 	}
 
@@ -518,54 +535,170 @@ class WatchPageParkButton {
 				requiredHeight: WATCH_BTN_REQUIRED_HEIGHT,
 			});
 			this.setMode(mode);
+			this.syncOverflowMenuItem();
 			return;
 		}
 
+		// Watch-page real-layout mode decision: actually insert the button at
+		// each candidate mode, measure the rendered rect, and accept the largest
+		// candidate that stays on the first line, doesn't overlap a sibling, fits
+		// inside the container box, and is on-screen. The previous
+		// containerWidth − nativeSpan arithmetic miscounted YouTube's leading
+		// gap and off-screen overflow, and the overlap-only guard never caught
+		// a button that wrapped to a second line (which still passed
+		// fitsWatchButtonInActionRow because line-2 doesn't overlap line-1).
 		this.setMode("full");
-		const fullWidth = Math.max(WATCH_BTN_ICON_WIDTH, Math.ceil(this.btn.getBoundingClientRect().width));
-		const availableWidth = this.measureWatchAvailableWidth();
+		const fullLayout = this.captureWatchLayout();
 		this.setMode("icon");
-		const iconWidth = Math.max(WATCH_BTN_ICON_WIDTH, Math.ceil(this.btn.getBoundingClientRect().width));
-		const mode = chooseWatchButtonMode({ availableWidth, fullWidth, iconWidth });
+		const iconLayout = this.captureWatchLayout();
+		const viewport = this.getViewportRect();
+		const mode = pickWatchButtonModeByLayout(fullLayout, iconLayout, viewport);
 		this.setMode(mode);
-		if (mode !== "hidden" && !this.fitsWatchActionRow()) {
-			this.setMode(mode === "full" ? "icon" : "hidden");
-			if (mode === "full" && !this.fitsWatchActionRow()) this.setMode("hidden");
+		this.syncOverflowMenuItem();
+	}
+
+	private captureWatchLayout(): WatchButtonLayoutSnapshot {
+		return {
+			button: this.toWatchButtonRect(this.btn.getBoundingClientRect()),
+			container: this.toWatchButtonRect(this.mountTarget!.container.getBoundingClientRect()),
+			siblings: this.collectSiblingRects(),
+		};
+	}
+
+	private collectSiblingRects(): WatchButtonRect[] {
+		if (!this.mountTarget) return [];
+		return Array.from(this.mountTarget.container.children)
+			.filter((child) => child !== this.btn)
+			.map((child) => child.getBoundingClientRect())
+			.filter((rect) => rect.width > 0 && rect.height > 0)
+			.map((rect) => this.toWatchButtonRect(rect));
+	}
+
+	private toWatchButtonRect(rect: DOMRect | { left: number; right: number; top: number; bottom: number }): WatchButtonRect {
+		return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+	}
+
+	private getViewportRect(): WatchButtonRect {
+		return { left: 0, right: window.innerWidth, top: 0, bottom: window.innerHeight };
+	}
+
+	private attachOverflowTrigger() {
+		const next = this.placement === "watch" ? this.findOverflowTrigger() : null;
+		if (next === this.overflowTriggerEl) return;
+		// YouTube can replace the trigger while opening its popup. Keep the
+		// click timestamp across that replacement so the newly attached listener
+		// still authorizes the popup item injection.
+		const preserveClick = next !== null && this.overflowTriggerClickedAt > 0;
+		this.detachOverflowTrigger(!preserveClick);
+		this.overflowTriggerEl = next;
+		next?.addEventListener("click", this.onOverflowTriggerClick, true);
+	}
+
+	private detachOverflowTrigger(clearClick = true) {
+		this.overflowTriggerEl?.removeEventListener("click", this.onOverflowTriggerClick, true);
+		this.overflowTriggerEl = null;
+		if (clearClick) this.overflowTriggerClickedAt = 0;
+	}
+
+	private findOverflowTrigger(): HTMLElement | null {
+		if (!this.mountTarget) return null;
+		return Array.from(
+			this.mountTarget.container.querySelectorAll<HTMLElement>(
+				'button[aria-label="More actions"], [role="button"][aria-label="More actions"]',
+			),
+		).find((element) => this.isVisibleElement(element)) ?? null;
+	}
+
+	private onOverflowTriggerClick = () => {
+		this.overflowTriggerClickedAt = Date.now();
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => this.syncOverflowMenuItem());
+		});
+	};
+
+	private isVisibleElement(element: HTMLElement): boolean {
+		const style = getComputedStyle(element);
+		if (style.display === "none" || style.visibility === "hidden") return false;
+		const rect = element.getBoundingClientRect();
+		return rect.width > 0 && rect.height > 0;
+	}
+
+	private findOverflowPopup(): HTMLElement | null {
+		const popups = Array.from(
+			document.querySelectorAll<HTMLElement>("ytd-menu-popup-renderer"),
+		).filter((popup) => {
+			const list = popup.querySelector<HTMLElement>("tp-yt-paper-listbox#items");
+			return !!list && this.isVisibleElement(popup) && this.isVisibleElement(list);
+		});
+		if (popups.length === 0) return null;
+		if (!this.overflowTriggerEl) return popups[0];
+
+		const trigger = this.overflowTriggerEl.getBoundingClientRect();
+		const triggerX = (trigger.left + trigger.right) / 2;
+		const triggerY = (trigger.top + trigger.bottom) / 2;
+		return popups.reduce((closest, popup) => {
+			const current = popup.getBoundingClientRect();
+			const currentX = (current.left + current.right) / 2;
+			const currentY = (current.top + current.bottom) / 2;
+			const closestRect = closest.getBoundingClientRect();
+			const closestX = (closestRect.left + closestRect.right) / 2;
+			const closestY = (closestRect.top + closestRect.bottom) / 2;
+			const currentDistance = Math.hypot(currentX - triggerX, currentY - triggerY);
+			const closestDistance = Math.hypot(closestX - triggerX, closestY - triggerY);
+			return currentDistance < closestDistance ? popup : closest;
+		});
+	}
+
+	private clearOverflowMenuItems() {
+		document.querySelectorAll<HTMLElement>(`[${WATCH_MENU_ITEM_ATTR}]`).forEach((item) => item.remove());
+	}
+
+	private syncOverflowMenuItem() {
+		const marker = `[${WATCH_MENU_ITEM_ATTR}]`;
+		const eligible = this.placement === "watch" && this.btn.dataset.tubeparkMode === "hidden";
+		const markedItems = Array.from(document.querySelectorAll<HTMLElement>(marker));
+		for (const item of markedItems) {
+			const popup = item.closest<HTMLElement>("ytd-menu-popup-renderer");
+			if (!eligible || !popup || !this.isVisibleElement(popup)) item.remove();
 		}
+
+		if (!eligible || Date.now() - this.overflowTriggerClickedAt > WATCH_MENU_TRIGGER_WINDOW_MS) return;
+		const popup = this.findOverflowPopup();
+		const list = popup?.querySelector<HTMLElement>("tp-yt-paper-listbox#items");
+		if (!list || list.querySelector(marker)) return;
+
+		// Use a plain element inside YouTube's native listbox. YouTube's custom
+		// ytd-menu-service-item-renderer rebuilds its children when upgraded,
+		// which would discard a dynamically supplied label; the surrounding
+		// popup still provides the native menu surface and focus context.
+		const item = document.createElement("div");
+		item.setAttribute(WATCH_MENU_ITEM_ATTR, "true");
+		item.setAttribute("aria-label", "Park & close tab");
+		item.setAttribute("role", "menuitem");
+		item.setAttribute("tabindex", "0");
+		const label = document.createElement("span");
+		label.className = "tubepark-watch-menu-label";
+		label.textContent = "Park & close tab";
+		item.append(label);
+		item.addEventListener("click", this.onOverflowMenuClick);
+		item.addEventListener("keydown", this.onOverflowMenuKeyDown);
+		list.append(item);
 	}
 
-	private measureWatchAvailableWidth(): number {
-		if (!this.mountTarget) return 0;
-		const container = this.mountTarget.container;
-		const previousDisplay = this.btn.style.display;
-		this.btn.style.display = "none";
-		const containerRect = container.getBoundingClientRect();
-		const rects = Array.from(container.children)
-			.filter((child) => child !== this.btn)
-			.map((child) => child.getBoundingClientRect())
-			.filter((rect) => rect.width > 0 && rect.height > 0);
-		this.btn.style.display = previousDisplay;
-		if (rects.length === 0) return containerRect.width;
-		const nativeLeft = Math.min(...rects.map((rect) => rect.left));
-		const nativeRight = Math.max(...rects.map((rect) => rect.right));
-		return Math.max(0, containerRect.width - (nativeRight - nativeLeft));
-	}
-
-	private fitsWatchActionRow(): boolean {
-		if (!this.mountTarget) return false;
-		const containerRect = this.mountTarget.container.getBoundingClientRect();
-		const buttonRect = this.btn.getBoundingClientRect();
-		if (buttonRect.width <= 0 || buttonRect.height <= 0) return false;
-		const siblingRects = Array.from(this.mountTarget.container.children)
-			.filter((child) => child !== this.btn)
-			.map((child) => child.getBoundingClientRect())
-			.filter((rect) => rect.width > 0 && rect.height > 0);
-		return fitsWatchButtonInActionRow(buttonRect, containerRect, siblingRects);
-	}
-
-	private onClick = (e: MouseEvent) => {
+	private onOverflowMenuClick = (e: MouseEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
+		this.doParkAndClose();
+	};
+
+	private onOverflowMenuKeyDown = (e: KeyboardEvent) => {
+		if (e.key !== "Enter" && e.key !== " ") return;
+		e.preventDefault();
+		e.stopPropagation();
+		this.doParkAndClose();
+	};
+
+	private doParkAndClose() {
 		if (!this.currentVideoId) return;
 		if (!runtimeAvailable()) return;
 		// Build the payload at click time so `resumeAt` reflects the current
@@ -587,6 +720,12 @@ class WatchPageParkButton {
 				if (result?.full) showToast(QUEUE_FULL_MSG, "full");
 			},
 		);
+	}
+
+	private onClick = (e: MouseEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		this.doParkAndClose();
 	};
 }
 
@@ -718,6 +857,9 @@ function injectToastStyles() {
     .${WATCH_BTN_CLASS} .tubepark-watch-park-label {
       white-space: nowrap;
     }
+    .${WATCH_BTN_CLASS}.${WATCH_BTN_COMPACT_CLASS} .tubepark-watch-park-label {
+      display: none;
+    }
     .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS} {
       margin-inline-start: 0;
       border-radius: 50%;
@@ -734,6 +876,27 @@ function injectToastStyles() {
     }
     .${WATCH_BTN_CLASS}.${WATCH_BTN_SHORTS_CLASS}.tubepark-watch-park-btn-parked {
       border-color: transparent;
+    }
+
+    [${WATCH_MENU_ITEM_ATTR}] {
+      display: block;
+      min-height: 40px;
+      box-sizing: border-box;
+      cursor: pointer;
+    }
+    [${WATCH_MENU_ITEM_ATTR}] > .tubepark-watch-menu-label {
+      display: block;
+      padding: 0 16px;
+      color: var(--yt-spec-text-primary, #0f0f0f);
+      font: 14px/40px Roboto, Arial, sans-serif;
+      white-space: nowrap;
+    }
+    [${WATCH_MENU_ITEM_ATTR}]:hover {
+      background: var(--yt-spec-10-percent-layer, rgba(0, 0, 0, 0.1));
+    }
+    [${WATCH_MENU_ITEM_ATTR}]:focus-visible {
+      outline: 2px solid var(--yt-spec-call-to-action, #3b9b55);
+      outline-offset: -2px;
     }
 
     /* Hover motion is pointer-gated so a touch tap can't fire a false scale. */

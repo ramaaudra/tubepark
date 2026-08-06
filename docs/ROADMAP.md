@@ -433,17 +433,19 @@ menyalin bug-nya.
 
 ### F10. Tombol "Park & close" di watch page
 
-> **Sudah digrill** (2026-07-28) → `docs/grilling/f10-watch-page-park-close.md`.
-> Tujuh keputusan (F10-1 s/d F10-7). Bawa "park + close tab + `resumeAt`" ke watch
-> page sebagai button always-visible portaled ke `<body>`, `position: fixed`
-> pojok kanan-atas viewport. 1-klik langsung, no confirm/undo (queue+resumeAt =
-> safety net). Coexist dgn `FloatingParkButton` (sidebar recs tetap park-only).
-> Scope `/watch` + `/shorts`. Nol DOM coupling. Content script relay ke
-> background (`PARK_AND_CLOSE_TAB`) untuk `chrome.tabs.remove(sender.tab.id)`.
+> **Sudah digrill** (2026-07-28, diperbarui 2026-08-01) →
+> `docs/grilling/f10-watch-page-park-close.md`. Bawa "park + close tab +
+> `resumeAt`" ke action row `/watch` dan action rail Shorts; tidak lagi memakai
+> viewport-fixed overlay. 1-klik langsung, no confirm/undo (queue+resumeAt = safety
+> net). Coexist dgn `FloatingParkButton` (sidebar recs tetap park-only). Content
+> script relay ke background (`PARK_AND_CLOSE_TAB`) untuk
+> `chrome.tabs.remove(sender.tab.id)`. Mount adapter di
+> `src/shared/watch-page-mount.ts` memilih label → ikon → hidden dari ruang aktual;
+> saat hidden, action tersedia lewat overflow menu tiga titik native YouTube, tanpa
+> floating fallback.
 > ✅ Mandiri — reuse `readMainVideoCurrentTime` (F4), `resolveWatchPageChannel`
-> (G4), `extractYouTubeVideoId` (G2), `tryParkWithPending` (G5). ⚠️ Butuh verifikasi:
-> mekanisme deteksi SPA nav (`yt-navigate-finish`+`popstate` vs poll),
-> `sender.tab.id` tersedia, `<video>` Shorts benar.
+> (G4), `extractYouTubeVideoId` (G2), `tryParkWithPending` (G5). ✅ Unit mount
+> tests ada; ✅ acceptance browser matrix sudah dijalankan pada Chromium.
 
 **Masalah:** "park + close + resumeAt" saat ini hanya di Popup
 (`popup/App.svelte:116`) — tiga gerak (buka popup → klik) untuk aksi yang
@@ -452,21 +454,23 @@ tanpa close, dan hanya di kartu — bukan video utama yang sedang diputar. Di wa
 page, tempat user paling sering ingin "udahan, simpan", tidak ada kontrol in-page.
 
 **Yang dikerjakan:** component baru `WatchPageParkButton` di `content.ts`,
-button portaled fixed always-visible scoped `/watch`+`/shorts`. Capture lokal
+inline mount scoped `/watch`+`/shorts` (watch action row; Shorts rail). Capture lokal
 (`videoId`/`title`/`channel`/`resumeAt` dari DOM, tanpa round-trip — lebih murah
 dari popup `GET_TAB_META`). Pesan baru `MSG.PARK_AND_CLOSE_TAB` → background
 park (reuse `tryParkWithPending` + `mutations.run`, lampirkan `ui.activeCollection`
 utk F8) + `chrome.tabs.remove(sender.tab.id)` pada success/duplicate; pada full →
 toast "Queue full", tab tidak di-close. Sinkron `parkedIds` (pola F1) untuk
-indikator parked subtle (bukan toggle). Listener SPA nav re-resolve per navigasi.
+indikator parked subtle (ikon pin terisi, bukan toggle). Listener SPA nav,
+MutationObserver, dan resize me-resolve mount.
 
 ✅ Tidak butuh permission baru (`tabs` sudah ada). ✅ Reuse capture + park yang
 sudah teruji. ⚠️ Content script hancur saat tab close → no toast on success
 (feedback = tab hilang + item di queue); full-case toast tetap jalan (tab tidak
 di-close).
 
-🔓 Terbuka: mekanisme deteksi SPA nav yang pasti; posisi `top` responsif di
-viewport sempit. Lihat spec.
+✅ Acceptance browser matrix pada live chat terbuka/tertutup, beberapa viewport,
+Download-visible layout, dark/light theme, dan navigasi Shorts sudah diverifikasi;
+guard sibling-rect + fallback warna theme-safe menutup regression overlap ini. Lihat spec.
 
 ---
 
