@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" class="tubepark-brand-mark" style="display:inline-block;vertical-align:middle;flex-shrink:0" aria-hidden="true">
+  <rect width="256" height="256" rx="58" fill="#192c20" />
+  <path d="M78 53v108c0 29.27 23.73 53 53 53h2c36.45 0 66-29.55 66-66s-29.55-66-66-66H78" fill="none" stroke="#d9f27c" stroke-linecap="round" stroke-linejoin="round" stroke-width="26" />
+  <path d="M78 53v54h55" fill="none" stroke="#f7efe4" stroke-linecap="round" stroke-linejoin="round" stroke-width="26" />
+  <circle cx="78" cy="53" r="11" fill="#ff715b" />
+</svg>

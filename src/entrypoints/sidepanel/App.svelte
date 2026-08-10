@@ -13,7 +13,7 @@
   import { parkIn, parkOut } from '../../components/transitions';
   import Thumbnail from '../../components/Thumbnail.svelte';
   import Icon from '../../components/Icon.svelte';
-  import ParkBadge from '../../components/ParkBadge.svelte';
+  import BrandMark from '../../components/BrandMark.svelte';
   import ParkMeter from '../../components/ParkMeter.svelte';
   import type { ParkedVideo, CapacityState, GroupingPreference } from '../../shared/types';
   import { positionFloatingMenu } from '../../shared/ui-helpers';
@@ -289,7 +289,7 @@
 </script>
 
 <main>
-  <header><div class="brand"><ParkBadge size={30}/><h1>TubePark</h1></div><ParkMeter count={capacity.count} max={capacity.max} status={capacity.status}/></header>
+  <header><div class="brand"><BrandMark size={30}/><h1>TubePark</h1></div><ParkMeter count={capacity.count} max={capacity.max} status={capacity.status}/></header>
   <section class="controls">
     <input type="search" aria-label="Search videos" placeholder="Search title or channel…" bind:value={query}/>
 
@@ -414,11 +414,11 @@
   </section>
   <div class="content">
     {#if loading}
-      <div class="empty loading-state" aria-busy="true"><ParkBadge size={34}/><h3>Loading your queue…</h3></div>
+      <div class="empty loading-state" aria-busy="true"><BrandMark size={34}/><h3>Loading your queue…</h3></div>
     {:else if loadError}
-      <div class="empty load-error" role="alert"><ParkBadge size={34}/><h3>Could not load your queue</h3><button type="button" class="pick-btn" onclick={() => { loading = true; void loadData().finally(() => { loading = false; }); }}>Retry</button></div>
+      <div class="empty load-error" role="alert"><BrandMark size={34}/><h3>Could not load your queue</h3><button type="button" class="pick-btn" onclick={() => { loading = true; void loadData().finally(() => { loading = false; }); }}>Retry</button></div>
     {:else if filtered.length === 0}
-      <div class="empty"><ParkBadge size={44}/><h3>{query ? 'No results' : 'No videos parked yet'}</h3><p>{query ? 'Try a different search.' : 'Park a video on YouTube to get started.'}</p></div>
+      <div class="empty"><BrandMark size={44}/><h3>{query ? 'No results' : 'No videos parked yet'}</h3><p>{query ? 'Try a different search.' : 'Park a video on YouTube to get started.'}</p></div>
     {/if}
     {#if !loading && !loadError && (capacity.status === 'warning' || capacity.status === 'full')}
       <div class="banner" class:banner-full={capacity.status === 'full'}><Icon name="warning" size={16}/>{capacity.status === 'full' ? `Queue full (${capacity.count}/${capacity.max})` : `Queue almost full (${capacity.count}/${capacity.max})`}</div>

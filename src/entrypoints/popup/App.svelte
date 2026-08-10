@@ -9,7 +9,7 @@
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
   import Thumbnail from '../../components/Thumbnail.svelte';
   import Icon from '../../components/Icon.svelte';
-  import ParkBadge from '../../components/ParkBadge.svelte';
+  import BrandMark from '../../components/BrandMark.svelte';
   import ParkMeter from '../../components/ParkMeter.svelte';
   import Equalizer from '../../components/Equalizer.svelte';
   import { parkIn, parkOut } from '../../components/transitions';
@@ -290,7 +290,7 @@
 <main class="popup-app">
   <header class="header">
     <div class="brand">
-      <ParkBadge size={26} />
+      <BrandMark size={26} />
       <span class="wordmark">TubePark</span>
     </div>
     <ParkMeter count={capacity.count} max={capacity.max} status={capacity.status} />
@@ -318,7 +318,7 @@
     <div class="buttons">
       {#if currentTabIsWatch}
         <button class="btn btn-primary" bind:this={parkBtnEl} onclick={handleParkCurrentTab} disabled={actionBusy}>
-          <ParkBadge size={16} />
+          <BrandMark size={16} />
           {actionBusy ? 'Parking…' : 'Park this tab & close'}
         </button>
       {/if}
@@ -369,7 +369,7 @@
 
     {#if loading}
       <div class="loading-state" aria-busy="true">
-        <ParkBadge size={24} />
+        <BrandMark size={24} />
         <p>Loading your queue…</p>
       </div>
     {:else if loadError}
@@ -379,7 +379,7 @@
       </div>
     {:else if recentItems.length === 0}
       <div class="empty">
-        <ParkBadge size={30} />
+        <BrandMark size={30} />
         <p>No videos parked yet</p>
         <span class="empty-sub">Hover a video on YouTube and click the park button</span>
       </div>

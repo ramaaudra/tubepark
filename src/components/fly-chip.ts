@@ -1,4 +1,5 @@
 import { flyChipPath } from "../shared/motion";
+import { brandMarkSvg } from "../shared/brand-mark";
 
 interface FlyChipOptions {
 	reduced: boolean;
@@ -7,7 +8,7 @@ interface FlyChipOptions {
 }
 
 /**
- * The signature park moment: a mini P-badge chip flies in a shallow arc
+ * The signature park moment: a mini Park Loop mark flies in a shallow arc
  * from the action button to where the item lands in the queue.
  * DOM/WAAPI side-effect — pure math lives (tested) in shared/motion.ts.
  * No-op under reduced motion: the list item's fade-in carries the feedback.
@@ -49,29 +50,9 @@ export function flyChip(
 		pointer-events: none;
 		z-index: 9999;
 	`;
-	// Mini P via SVG so the chip matches the badge geometry.
+	// Reuse the canonical brand SVG so the motion chip cannot drift from BrandMark.
 	if (!label) {
-		const svgNS = "http://www.w3.org/2000/svg";
-		const svg = document.createElementNS(svgNS, "svg");
-		svg.setAttribute("viewBox", "0 0 256 256");
-		svg.setAttribute("width", "20");
-		svg.setAttribute("height", "20");
-		const rect = document.createElementNS(svgNS, "rect");
-		rect.setAttribute("x", "16");
-		rect.setAttribute("y", "16");
-		rect.setAttribute("width", "224");
-		rect.setAttribute("height", "224");
-		rect.setAttribute("rx", "56");
-		rect.setAttribute("fill", "var(--tp-accent)");
-		const path = document.createElementNS(svgNS, "path");
-		path.setAttribute("d", "M92 192V64h52a48 48 0 0 1 0 96H92");
-		path.setAttribute("fill", "none");
-		path.setAttribute("stroke", "var(--tp-accent-contrast)");
-		path.setAttribute("stroke-width", "30");
-		path.setAttribute("stroke-linecap", "round");
-		path.setAttribute("stroke-linejoin", "round");
-		svg.append(rect, path);
-		chip.appendChild(svg);
+		chip.innerHTML = brandMarkSvg(20);
 		chip.style.background = "transparent";
 	}
 	document.body.appendChild(chip);
