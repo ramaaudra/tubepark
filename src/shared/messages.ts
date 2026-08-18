@@ -36,6 +36,11 @@ export const MSG = {
 	/** Popup → content script on a YouTube watch tab: read channel + currentTime
 	 * from the live DOM (G4+F4). Responds with `{ channel, currentTime }`. */
 	GET_TAB_META: "GET_TAB_META",
+	/** Popup → background: park all other YouTube tabs (except the active one).
+	 * Responds with `{ parked: number, reachedCapacity: boolean }`.
+	 * Runs in background so the process survives popup close. */
+	PARK_ALL_OTHER_TABS: "PARK_ALL_OTHER_TABS",
+
 	/** Content script → background: park one video AND close the sender's tab.
 	 * Responds with ParkResult. The background closes `sender.tab.id` only on
 	 * success/duplicate (full → no close, so the video is not lost); the content

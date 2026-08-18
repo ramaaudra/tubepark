@@ -22,7 +22,7 @@ import {
 	visibleQueue,
 } from "../shared/pending-removal";
 import { MSG } from "../shared/messages";
-import { extractYouTubeVideoId } from "../shared/capture-predicates";
+import { extractYouTubeVideoId, cleanYouTubeTitle } from "../shared/capture-predicates";
 import { MutationQueue } from "../shared/mutation-queue";
 
 const CONTEXT_MENU_ID = "tubepark-park-context-menu";
@@ -165,6 +165,47 @@ async function parkOne(payload: ParkedVideo) {
 	});
 }
 
+/** Fetch channel + currentTime from a YouTube tab's content script.
+ * Falls back to defaults when the CS is not loaded yet. */
+async function fetchTabMeta(tabId: number): Promise<{ channel: string; currentTime: number }> {
+	const FALLBACK_META = { channel: "YouTube", currentTime: 0 };
+	if (!chrome.tabs?.sendMessage) return FALLBACK_META;
+	return new Promise((resolve) => {
+		chrome.tabs.sendMessage(tabId, { type: MSG.GET_TAB_META }, (resp) => {
+			if (chrome.runtime.lastError || !resp || typeof resp !== "object") {
+				resolve(FALLBACK_META);
+				return;
+			}
+			const channel =
+				typeof (resp as { channel?: string }).channel === "string" && (resp as { channel?: string }).channel
+					? (resp as { channel?: string }).channel!
+					: FALLBACK_META.channel;
+			const currentTime =
+				typeof (resp as { currentTime?: number }).currentTime === "number"
+					? Math.floor((resp as { currentTime?: number }).currentTime!)
+					: 0;
+			resolve({ channel, currentTime });
+		});
+	});
+}
+
+/** Build a ParkedVideo for tab-park: title from the tab, channel + optional
+ * resumeAt from GET_TAB_META. Omits resumeAt when currentTime is 0 (F4). */
+function parkedFromTab(
+	videoId: string,
+	tabTitle: string | undefined,
+	meta: { channel: string; currentTime: number },
+): ParkedVideo {
+	const payload: ParkedVideo = {
+		id: videoId,
+		title: cleanYouTubeTitle(tabTitle || "YouTube Video"),
+		channel: meta.channel,
+		addedAt: Date.now(),
+	};
+	if (meta.currentTime > 0) payload.resumeAt = meta.currentTime;
+	return payload;
+}
+
 export default defineBackground(() => {
 	console.log("[TubePark] Background Service Worker initialized");
 
@@ -236,6 +277,54 @@ export default defineBackground(() => {
 					const tabId = sender.tab?.id;
 					if ((result.success || result.duplicate) && typeof tabId === "number") {
 						chrome.tabs.remove(tabId, () => void chrome.runtime.lastError);
+					}
+				})();
+				return true;
+			}
+
+			// Park all other YouTube tabs — runs in background so the process
+			// survives popup close. Popup sends a single message; background
+			// handles the entire loop.
+			if (message?.type === MSG.PARK_ALL_OTHER_TABS) {
+				(async () => {
+					try {
+						const tabs = await chrome.tabs.query({});
+						const watchTabs = tabs.filter(
+							(t) => !!t.url && extractYouTubeVideoId(t.url) !== null,
+						);
+						const activeTabs = await chrome.tabs.query({
+							active: true,
+							currentWindow: true,
+						});
+						const activeTab = activeTabs.length > 0 ? activeTabs[0] : null;
+
+						let parked = 0;
+						let reachedCapacity = false;
+
+						for (const tab of watchTabs) {
+							if (activeTab && tab.id === activeTab.id) continue;
+							if (!tab.url) continue;
+							const videoId = extractYouTubeVideoId(tab.url);
+							if (!videoId) continue;
+
+							const meta = tab.id ? await fetchTabMeta(tab.id) : { channel: "YouTube", currentTime: 0 };
+							const result = await parkOne(parkedFromTab(videoId, tab.title, meta));
+
+							if (result.success || result.duplicate) {
+								parked += 1;
+								if (tab.id) {
+									chrome.tabs.remove(tab.id, () => void chrome.runtime.lastError);
+								}
+							} else if (result.full) {
+								reachedCapacity = true;
+								break;
+							}
+						}
+
+						await updateBadge();
+						sendResponse({ parked, reachedCapacity });
+					} catch {
+						sendResponse({ parked: 0, reachedCapacity: false, error: true });
 					}
 				})();
 				return true;

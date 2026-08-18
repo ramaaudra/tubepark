@@ -180,32 +180,24 @@
     actionBusy = true;
     actionFeedback = null;
     try {
-      const watchTabs = await tabOps.getWatchTabs();
-      const activeTab = await tabOps.getActiveTab();
+      // Delegate to background service worker so the process survives popup close.
+      const result = await new Promise<{ parked: number; reachedCapacity: boolean; error?: boolean }>((resolve) => {
+        chrome.runtime?.sendMessage({ type: MSG.PARK_ALL_OTHER_TABS }, (res) => {
+          if (chrome.runtime?.lastError || !res || typeof res !== 'object') {
+            resolve({ parked: 0, reachedCapacity: false, error: true });
+          } else {
+            resolve(res as { parked: number; reachedCapacity: boolean; error?: boolean });
+          }
+        });
+      });
 
-      let parked = 0;
-      let reachedCapacity = false;
-      for (const tab of watchTabs) {
-        if (activeTab && tab.id === activeTab.id) continue;
-        if (!tab.url) continue;
-        const videoId = extractYouTubeVideoId(tab.url);
-        if (!videoId) continue;
+      const { parked, reachedCapacity, error } = result;
 
-        // One GET_TAB_META per tab (G4 channel + F4 currentTime). CS-miss → fallback.
-        const meta = tab.id ? await fetchTabMeta(tab.id) : FALLBACK_META;
-        const result = await parkVideo(parkedFromTab(videoId, tab.title, meta));
-
-        if (result.success || result.duplicate) {
-          parked += 1;
-          if (tab.id) await tabOps.closeTab(tab.id);
-        } else if (result.full) {
-          reachedCapacity = true;
-          break;
-        }
-      }
       if (parked > 0) launchChip(parkAllBtnEl, `\u00d7${parked}`);
 
-      if (reachedCapacity) {
+      if (error) {
+        actionFeedback = { tone: 'danger', message: 'Could not park the other tabs. Try again.' };
+      } else if (reachedCapacity) {
         actionFeedback = {
           tone: 'warning',
           message: parked > 0
