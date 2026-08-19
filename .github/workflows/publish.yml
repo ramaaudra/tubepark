@@ -52,7 +52,7 @@ jobs:
           echo "✅ Package structure verified"
 
       - name: Upload and publish to Chrome Web Store
-        uses: mnao305/chrome-extension-upload@v5
+        uses: mnao305/chrome-extension-upload@v6.0.0
         with:
           file-path: extension.zip
           extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
