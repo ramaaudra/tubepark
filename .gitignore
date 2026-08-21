@@ -8,3 +8,4 @@ dist
 test-results/
 debug/
 .pi-subagents/
+pi-session-*.html

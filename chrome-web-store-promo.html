@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="TubePark 1320 by 840 Chrome Web Store promotional tile."
+    />
+    <title>TubePark Chrome Web Store promo</title>
+    <style>
+      :root {
+        --render-scale: 3; /* 1320x840 output from the 440x280 base */
+        --tp-font:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+          sans-serif;
+        --tp-bg: #f2f6ef;
+        --tp-surface: #ffffff;
+        --tp-border: #d9e4d3;
+        --tp-text: #1d2b1f;
+        --tp-text-2: #4f6353;
+        --tp-text-3: #64766a;
+        --tp-accent: #267f3b;
+        --tp-accent-soft: #dcefdc;
+        --tp-shadow: rgba(29, 43, 31, 0.18);
+        --tp-radius: 14px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        min-width: 100%;
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        overflow: auto;
+        background: var(--tp-bg);
+        color: var(--tp-text);
+        font-family: var(--tp-font);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .promo-stage {
+        width: calc(440px * var(--render-scale));
+        height: calc(280px * var(--render-scale));
+      }
+
+      /* The tile stays intentionally fixed to the Chrome Web Store asset ratio. */
+      .promo {
+        position: relative;
+        width: 440px;
+        height: 280px;
+        aspect-ratio: 11 / 7;
+        overflow: hidden;
+        isolation: isolate;
+        background:
+          radial-gradient(circle at 95% 5%, rgba(81, 200, 108, 0.22), transparent 34%),
+          radial-gradient(circle at 12% 110%, rgba(220, 239, 220, 0.9), transparent 43%),
+          var(--tp-bg);
+        transform: scale(var(--render-scale));
+        transform-origin: top left;
+      }
+
+      .promo::before {
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        background:
+          linear-gradient(112deg, rgba(255, 255, 255, 0.36), transparent 52%),
+          repeating-linear-gradient(
+            0deg,
+            rgba(29, 43, 31, 0.018) 0,
+            rgba(29, 43, 31, 0.018) 1px,
+            transparent 1px,
+            transparent 4px
+          );
+        content: "";
+        pointer-events: none;
+      }
+
+      .brand-lockup {
+        position: absolute;
+        top: 24px;
+        left: 25px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+
+      .brand-lockup img {
+        width: 31px;
+        height: 31px;
+        display: block;
+        border-radius: 9px;
+        box-shadow: 0 2px 6px rgba(29, 43, 31, 0.16);
+      }
+
+      .wordmark {
+        font-size: 17px;
+        font-weight: 800;
+        letter-spacing: -0.045em;
+        line-height: 1;
+      }
+
+      .copy {
+        position: absolute;
+        top: 80px;
+        left: 26px;
+        width: 200px;
+      }
+
+      .copy h1 {
+        max-width: 200px;
+        margin: 0;
+        font-size: clamp(24px, 5.7vw, 25px);
+        font-weight: 800;
+        letter-spacing: -0.07em;
+        line-height: 0.96;
+      }
+
+      .copy h1 span {
+        display: block;
+      }
+
+      .copy p {
+        max-width: 184px;
+        margin: 14px 0 0;
+        color: var(--tp-text-2);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: -0.012em;
+        line-height: 1.34;
+      }
+
+      .proof {
+        position: absolute;
+        bottom: 24px;
+        left: 26px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--tp-accent);
+        font-size: 9.5px;
+        font-weight: 800;
+        letter-spacing: 0.045em;
+        line-height: 1;
+        text-transform: uppercase;
+      }
+
+      .proof::before {
+        width: 17px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--tp-accent);
+        content: "";
+      }
+
+      .shot-back {
+        position: absolute;
+        top: 43px;
+        right: 11px;
+        width: 198px;
+        height: 214px;
+        border: 1px solid rgba(38, 127, 59, 0.18);
+        border-radius: var(--tp-radius);
+        background: var(--tp-accent-soft);
+        transform: rotate(-3.2deg);
+      }
+
+      .product-shot {
+        position: absolute;
+        top: 34px;
+        right: 0;
+        width: 210px;
+        height: 220px;
+        margin: 0;
+        overflow: hidden;
+        border: 5px solid var(--tp-surface);
+        border-radius: var(--tp-radius);
+        background: #18211b;
+        box-shadow: 0 15px 28px var(--tp-shadow);
+        transform: rotate(3.2deg);
+      }
+
+      .product-shot::after {
+        position: absolute;
+        inset: 0;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 9px;
+        content: "";
+        pointer-events: none;
+      }
+
+      .product-shot img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+        object-position: 91% 52%;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+
+      /* Optional dark preview: open this file with ?theme=dark. */
+      [data-theme="dark"] {
+        --tp-bg: #101713;
+        --tp-surface: #18211b;
+        --tp-border: #2a3830;
+        --tp-text: #e4efe2;
+        --tp-text-2: #9fb3a0;
+        --tp-text-3: #84968a;
+        --tp-accent: #51c86c;
+        --tp-accent-soft: rgba(81, 200, 108, 0.16);
+        --tp-shadow: rgba(0, 0, 0, 0.42);
+      }
+
+      [data-theme="dark"] .promo {
+        background:
+          radial-gradient(circle at 95% 5%, rgba(81, 200, 108, 0.2), transparent 34%),
+          radial-gradient(circle at 12% 110%, rgba(31, 52, 38, 0.85), transparent 43%),
+          var(--tp-bg);
+      }
+
+      [data-theme="dark"] .promo::before {
+        background:
+          linear-gradient(112deg, rgba(255, 255, 255, 0.06), transparent 52%),
+          repeating-linear-gradient(
+            0deg,
+            rgba(255, 255, 255, 0.018) 0,
+            rgba(255, 255, 255, 0.018) 1px,
+            transparent 1px,
+            transparent 4px
+          );
+      }
+
+      [data-theme="dark"] .product-shot {
+        border-color: var(--tp-surface);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="promo-stage">
+      <main class="promo" id="promo" aria-label="TubePark promotional tile">
+        <div class="brand-lockup">
+          <img src="public/icon/128.png" alt="" />
+          <span class="wordmark">TubePark</span>
+        </div>
+
+        <div class="copy">
+          <h1>
+            <span>Park videos.</span>
+            <span>Keep the context.</span>
+          </h1>
+          <p>A visual watch-later queue for YouTube, without the tab pile.</p>
+        </div>
+
+        <div class="proof">Local queue. No account.</div>
+
+        <div class="shot-back" aria-hidden="true"></div>
+        <figure class="product-shot">
+          <img
+            src="docs/images/popup.webp"
+            alt="TubePark popup showing a thumbnail-rich YouTube queue"
+          />
+        </figure>
+      </main>
+    </div>
+
+    <script>
+      const theme = new URLSearchParams(window.location.search).get('theme');
+      if (theme === 'dark') document.documentElement.dataset.theme = 'dark';
+    </script>
+  </body>
+</html>

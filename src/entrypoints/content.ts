@@ -14,7 +14,7 @@ import {
 import { type IconName, type IconPath, icons } from "../shared/icons";
 import { MSG } from "../shared/messages";
 import type { ParkedVideo } from "../shared/types";
-import { parkedVideoIds, parkToastMessage, withoutPendingIds } from "../shared/parked-set";
+import { parkedVideoIds, parkToastMessage } from "../shared/parked-set";
 import {
 	runtimeAvailable,
 	sendRuntimeMessage,
@@ -134,6 +134,7 @@ class FloatingParkButton {
 	private activeMeta: CardMeta | null = null;
 	private rafPending = false;
 	private parkedIds = new Set<string>();
+	private parkedVideos = new Map<string, ParkedVideo>();
 	private lastX = 0;
 	private lastY = 0;
 
@@ -160,16 +161,28 @@ class FloatingParkButton {
 
 	setParkedIds(ids: Set<string>) {
 		this.parkedIds = ids;
+		for (const id of this.parkedVideos.keys()) {
+			if (!ids.has(id)) this.parkedVideos.delete(id);
+		}
 		this.renderState();
+	}
+
+	setParkedVideos(videos: ParkedVideo[]) {
+		this.parkedVideos = new Map(videos.map((video) => [video.id, video]));
+		this.setParkedIds(new Set(this.parkedVideos.keys()));
 	}
 
 	getParkedIds(): ReadonlySet<string> {
 		return this.parkedIds;
 	}
 
+	getParkedVideos(): ParkedVideo[] {
+		return [...this.parkedVideos.values()];
+	}
+
 	private syncParkedIds = async () => {
 		const state = await sendRuntimeMessageAsync<{ queue?: ParkedVideo[] }>({ type: MSG.GET_QUEUE });
-		this.setParkedIds(parkedVideoIds(state?.queue ?? []));
+		this.setParkedVideos(state?.queue ?? []);
 	};
 
 	private renderState() {
@@ -268,13 +281,28 @@ class FloatingParkButton {
 		if (!runtimeAvailable()) return;
 
 		if (this.parkedIds.has(meta.videoId)) {
+			const target = this.parkedVideos.get(meta.videoId);
+			if (!target) {
+				void this.syncParkedIds();
+				return;
+			}
 			this.parkedIds.delete(meta.videoId);
 			this.renderState();
 			sendRuntimeMessage(
-				{ type: MSG.PENDING_REMOVE, ids: [meta.videoId] },
-				() => showToast("Removed", "success", () => {
-					sendRuntimeMessage({ type: MSG.CANCEL_REMOVE }, () => void this.syncParkedIds());
-				}),
+				{ type: MSG.PENDING_REMOVE, videos: [target], owner: "content" },
+				(result) => {
+					const operationId = result?.pending?.operationId;
+					if (typeof operationId !== "string") {
+						void this.syncParkedIds();
+						return;
+					}
+					showToast("Removed", "success", () => {
+						sendRuntimeMessage(
+							{ type: MSG.CANCEL_REMOVE, operationId, owner: "content" },
+							() => void this.syncParkedIds(),
+						);
+					});
+				},
 			);
 			return;
 		}
@@ -293,6 +321,7 @@ class FloatingParkButton {
 			(result) => {
 				if (result?.success) {
 					this.parkedIds.add(meta.videoId);
+					this.parkedVideos.set(meta.videoId, payload);
 					this.flash("check");
 				} else if (result?.duplicate) {
 					this.flash("pinFill");
@@ -713,8 +742,8 @@ class WatchPageParkButton {
 		sendRuntimeMessage(
 			{ type: MSG.PARK_AND_CLOSE_TAB, payload },
 			(result) => {
-				// The tab is about to be closed on success/duplicate (background
-				// calls chrome.tabs.remove). Only `full` keeps the tab alive —
+					// The tab is about to be closed on success/duplicate by the background
+					// tab-operation seam. Only `full` keeps the tab alive —
 				// surface it so the user knows the park was rejected. Intentionally
 				// NOT showParkResult: success/duplicate toasts would never render
 				// (the content script dies with the tab) — see showParkResult doc.
@@ -920,7 +949,7 @@ function injectToastStyles() {
 }
 
 export default defineContentScript({
-	matches: ["*://*.youtube.com/*"],
+	matches: ["*://*.youtube.com/*", "*://youtu.be/*"],
 	main(ctx) {
 		console.log("[TubePark] Content script loaded on YouTube");
 
@@ -932,13 +961,13 @@ export default defineContentScript({
 		const watchButton = new WatchPageParkButton();
 		// One call site to sync both buttons' parked-id sets — a future third
 		// button is one edit here, not three scattered ones.
-		const syncAllButtons = (ids: Set<string>) => {
-			floatingButton.setParkedIds(ids);
-			watchButton.setParkedIds(ids);
+		const syncAllButtons = (videos: ParkedVideo[]) => {
+			floatingButton.setParkedVideos(videos);
+			watchButton.setParkedIds(parkedVideoIds(videos));
 		};
 		const onStorageChanged = () => {
 			sendRuntimeMessage({ type: MSG.GET_QUEUE }, (state) => {
-				syncAllButtons(parkedVideoIds(state?.queue ?? []));
+				syncAllButtons(state?.queue ?? []);
 			});
 		};
 		chrome.storage?.onChanged.addListener(onStorageChanged);
@@ -951,10 +980,13 @@ export default defineContentScript({
 		) => {
 			if (message?.type === MSG.PENDING_REMOVAL_CHANGED) {
 				const pendingIds = Array.isArray(message.pendingIds) ? message.pendingIds : [];
-				syncAllButtons(withoutPendingIds(floatingButton.getParkedIds(), pendingIds));
+				const pendingIdSet = new Set(pendingIds.filter((id: unknown): id is string => typeof id === "string"));
+				syncAllButtons(
+					floatingButton.getParkedVideos().filter((video) => !pendingIdSet.has(video.id)),
+				);
 				if (pendingIds.length === 0) {
 					sendRuntimeMessage({ type: MSG.GET_QUEUE }, (state) => {
-						syncAllButtons(parkedVideoIds(state?.queue ?? []));
+						syncAllButtons(state?.queue ?? []);
 					});
 				}
 				return false;

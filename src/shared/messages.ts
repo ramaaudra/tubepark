@@ -13,9 +13,12 @@ export const MSG = {
 	PARK_VIDEO_REQUEST: "PARK_VIDEO_REQUEST",
 	/** Background → content script: a context-menu link park was requested. */
 	CONTEXT_MENU_PARK: "CONTEXT_MENU_PARK",
-	/** Panel → background: start a grace-period removal for 1 or N videos. */
+	/** UI/content → background: start a grace-period removal for 1 or N videos.
+	 * Carries full video identities plus `owner: "popup" | "sidepanel" |
+	 * "content"`; the background resolves those identities inside its mutation
+	 * queue so a stale id cannot delete a later re-park. */
 	PENDING_REMOVE: "PENDING_REMOVE",
-	/** Panel → background: undo — cancel the current grace-period removal. */
+	/** UI/content → background: undo — cancel only the matching operation and owner. */
 	CANCEL_REMOVE: "CANCEL_REMOVE",
 	/** Panel → background: toggle an item's pinned flag (read-modify-write on raw). */
 	TOGGLE_PINNED: "TOGGLE_PINNED",
@@ -23,15 +26,18 @@ export const MSG = {
 	MUTATE_QUEUE: "MUTATE_QUEUE",
 	/** Popup → background: immediate single (or bulk) delete, no grace period. */
 	REMOVE_NOW: "REMOVE_NOW",
-	/** Popup → background: commit the current pending slot immediately. */
+	/** Popup → background: commit only the matching pending slot immediately. */
 	COMMIT_PENDING: "COMMIT_PENDING",
-	/** Popup / panel → background: read-for-display queue + capacity (filters pending). */
+	/** Popup / panel → background: read-for-display queue + capacity (filters pending).
+	 * Carries an optional owner to scope the Undo summary. */
 	GET_VISIBLE_QUEUE: "GET_VISIBLE_QUEUE",
 	/** Content script → background: alias for its parked-id Set snapshot. */
 	GET_QUEUE: "GET_QUEUE",
 	/** Background → all extension pages + YouTube content scripts: the pending
 	 * removal set changed. `pendingIds` is the list of videoIds currently hidden
-	 * by a grace-period deletion (empty after commit or undo). */
+	 * by a grace-period deletion (empty after commit or undo); owner identifies
+	 * the current transaction or is null. Operation IDs are intentionally not
+	 * broadcast to unrelated surfaces. */
 	PENDING_REMOVAL_CHANGED: "PENDING_REMOVAL_CHANGED",
 	/** Popup → content script on a YouTube watch tab: read channel + currentTime
 	 * from the live DOM (G4+F4). Responds with `{ channel, currentTime }`. */

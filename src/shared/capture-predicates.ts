@@ -1,6 +1,19 @@
 import { parseDurationSec } from "./filters";
 import type { ParkedVideo } from "./types";
 
+/** URL patterns used for all cross-tab reads. Keep this list aligned with the
+ * manifest host permissions so removing broad `tabs` access does not remove
+ * YouTube tab discovery. */
+export const YOUTUBE_TAB_URL_PATTERNS = [
+	"*://*.youtube.com/*",
+	"*://youtu.be/*",
+];
+
+export function isYouTubeHostname(hostname: string): boolean {
+	const normalized = hostname.toLowerCase();
+	return normalized === "youtube.com" || normalized.endsWith(".youtube.com") || normalized === "youtu.be";
+}
+
 export const YOUTUBE_VIDEO_CARD_SELECTORS = [
 	"ytd-rich-item-renderer",
 	"ytd-video-renderer",
@@ -43,9 +56,11 @@ export function extractYouTubeVideoId(urlStr: string): string | null {
 	try {
 		const url = new URL(urlStr, "https://www.youtube.com");
 
-		if (url.hostname.includes("youtu.be")) {
-			const id = url.pathname.slice(1);
-			return id ? id.split("?")[0] : null;
+		if (!isYouTubeHostname(url.hostname)) return null;
+
+		if (url.hostname === "youtu.be") {
+			const id = url.pathname.slice(1).split("/")[0];
+			return id || null;
 		}
 
 		if (url.pathname === "/watch" || url.pathname.startsWith("/watch")) {

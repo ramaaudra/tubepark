@@ -3,7 +3,7 @@
   import { flip } from 'svelte/animate';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { getQueueState, parkVideo, requestRemoval, cancelRemoval, type QueueState } from '../../shared/storage';
+  import { getQueueState, parkVideo, requestRemoval, cancelRemoval, commitPending, type QueueState } from '../../shared/storage';
   import { extractYouTubeVideoId, cleanYouTubeTitle } from '../../shared/capture-predicates';
   import { MSG, type TabMeta } from '../../shared/messages';
   import { tabOps, type NowPlayingTab } from '../../shared/tab-operations';
@@ -23,25 +23,15 @@
    * Falls back to `{ channel: 'YouTube', currentTime: 0 }` when the CS is not
    * loaded yet (tab still loading) or chrome.runtime.lastError fires. */
   function fetchTabMeta(tabId: number): Promise<TabMeta> {
-    if (typeof chrome === 'undefined' || !chrome.tabs?.sendMessage) {
-      return Promise.resolve(FALLBACK_META);
-    }
-    return new Promise((resolve) => {
-      chrome.tabs.sendMessage(tabId, { type: MSG.GET_TAB_META }, (resp) => {
-        if (chrome.runtime.lastError || !resp || typeof resp !== 'object') {
-          resolve(FALLBACK_META);
-          return;
-        }
-        const channel =
-          typeof (resp as TabMeta).channel === 'string' && (resp as TabMeta).channel
-            ? (resp as TabMeta).channel
-            : FALLBACK_META.channel;
-        const currentTime =
-          typeof (resp as TabMeta).currentTime === 'number'
-            ? Math.floor((resp as TabMeta).currentTime)
-            : 0;
-        resolve({ channel, currentTime });
-      });
+    return tabOps.sendMessage<TabMeta>(tabId, { type: MSG.GET_TAB_META }).then((resp) => {
+      if (!resp || typeof resp !== 'object') return FALLBACK_META;
+      const channel = typeof resp.channel === 'string' && resp.channel
+        ? resp.channel
+        : FALLBACK_META.channel;
+      const currentTime = typeof resp.currentTime === 'number'
+        ? Math.floor(resp.currentTime)
+        : 0;
+      return { channel, currentTime };
     });
   }
 
@@ -70,6 +60,9 @@
   let nowPlaying = $state<NowPlayingTab | null>(null);
   let pendingCount = $state(0);
   let pendingVideos = $state<ParkedVideo[]>([]);
+  let pendingOperationId = $state<string | null>(null);
+  let pendingRemovalRequest: Promise<QueueState> | null = null;
+  let loadGeneration = 0;
 
   let reduced = $state(false);
   let loading = $state(true);
@@ -85,29 +78,43 @@
   function applyState(state: QueueState) {
     queue = state.queue;
     capacity = state.capacity;
+    if (state.pending) {
+      pendingCount = state.pending.count;
+      pendingOperationId = state.pending.operationId;
+    } else {
+      pendingCount = 0;
+      pendingOperationId = null;
+      pendingVideos = [];
+    }
   }
 
   async function loadData(showLoading = !hydrated) {
+    const generation = ++loadGeneration;
     if (showLoading) loading = true;
     try {
-      applyState(await getQueueState());
+      const state = await getQueueState('popup');
+      if (generation !== loadGeneration) return;
+      applyState(state);
 
       const activeTab = await tabOps.getActiveTab();
+      if (generation !== loadGeneration) return;
       currentTabInfo = activeTab;
       currentTabIsWatch = activeTab !== null && extractYouTubeVideoId(activeTab.url) !== null;
 
       const watchTabs = await tabOps.getWatchTabs();
+      if (generation !== loadGeneration) return;
       openWatchTabCount = watchTabs.length;
 
       nowPlaying = await tabOps.getNowPlayingTab();
+      if (generation !== loadGeneration) return;
       loadError = false;
-    } catch {
-      loadError = true;
-    } finally {
-      if (showLoading) {
-        loading = false;
-        hydrated = true;
-      }
+	    } catch {
+	      if (generation === loadGeneration) loadError = true;
+	    } finally {
+	      if (showLoading && generation === loadGeneration) {
+	        loading = false;
+	        hydrated = true;
+	      }
     }
   }
 
@@ -119,16 +126,23 @@
       animateItems = true;
     })();
     const storageListener = () => void loadData();
-    const commitPending = () => {
-      if (pendingCount > 0) chrome.runtime?.sendMessage({ type: MSG.COMMIT_PENDING });
+    const messageListener = (message: { type?: string }) => {
+      if (message.type !== MSG.PENDING_REMOVAL_CHANGED) return false;
+      void loadData(false);
+      return false;
+    };
+    const commitPendingOnClose = () => {
+      if (pendingCount > 0 && pendingOperationId) void commitPending(pendingOperationId, 'popup');
     };
     chrome.storage?.onChanged.addListener(storageListener);
-    window.addEventListener('blur', commitPending);
-    window.addEventListener('pagehide', commitPending);
+    chrome.runtime?.onMessage.addListener(messageListener);
+    window.addEventListener('blur', commitPendingOnClose);
+    window.addEventListener('pagehide', commitPendingOnClose);
     return () => {
       chrome.storage?.onChanged.removeListener(storageListener);
-      window.removeEventListener('blur', commitPending);
-      window.removeEventListener('pagehide', commitPending);
+      chrome.runtime?.onMessage.removeListener(messageListener);
+      window.removeEventListener('blur', commitPendingOnClose);
+      window.removeEventListener('pagehide', commitPendingOnClose);
     };
   });
 
@@ -226,20 +240,33 @@
     capacity = { ...capacity, count: queue.length, percentage: (queue.length / capacity.max) * 100 };
     pendingVideos = [video];
     pendingCount = 1;
+    pendingOperationId = null;
     try {
-      applyState(await requestRemoval([video]));
+      const request = requestRemoval([video], 'popup');
+      pendingRemovalRequest = request;
+      const state = await request;
+      applyState(state);
+      pendingCount = state.pending?.count ?? 0;
+      pendingOperationId = state.pending?.operationId ?? null;
     } catch {
       queue = previous;
       pendingVideos = [];
       pendingCount = 0;
+      pendingOperationId = null;
+    } finally {
+      pendingRemovalRequest = null;
     }
   }
 
   async function handleUndo() {
+    if (pendingRemovalRequest) await pendingRemovalRequest.catch(() => null);
+    const operationId = pendingOperationId;
+    if (!operationId) return;
     queue = [...queue, ...pendingVideos];
     pendingVideos = [];
     pendingCount = 0;
-    applyState(await cancelRemoval());
+    pendingOperationId = null;
+    applyState(await cancelRemoval(operationId, 'popup'));
   }
 
   async function handleOpenSidePanel() {
@@ -401,7 +428,7 @@
   </section>
 
   {#if pendingCount > 0}
-    <div class="undo-toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 240, easing: cubicOut }}><span>Video removed</span><button type="button" onclick={handleUndo}>Undo</button></div>
+    <div class="undo-toast" transition:fly={{ y: reduced ? 0 : 24, duration: reduced ? 150 : 240, easing: cubicOut }}><span>Video removed</span><button type="button" disabled={!pendingOperationId} onclick={handleUndo}>Undo</button></div>
   {/if}
 </main>
 

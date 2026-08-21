@@ -19,9 +19,9 @@ import {
 /**
  * Load a real captured YouTube card fixture and return the element that the
  * content script's `.closest(CARD_SELECTOR)` would resolve to when hovering it.
- * Fixtures are verbatim outerHTML captured from live YouTube (see
- * __fixtures__/), so these tests guard against YouTube's DOM churn — the exact
- * regression that broke the park button on channel pages.
+	 * Fixtures are either captured outerHTML or deliberately pinned DOM contracts
+	 * (see __fixtures__/), so these tests guard the selector assumptions that
+	 * protect against YouTube's DOM churn.
  */
 function cardFromFixture(name: string): Element {
 	const path = fileURLToPath(
@@ -63,6 +63,12 @@ describe("Capture Predicates", () => {
 			);
 		});
 
+		it("extracts video id from youtu.be short URL with a trailing slash", () => {
+			expect(extractYouTubeVideoId("https://youtu.be/dQw4w9WgXcQ/")).toBe(
+				"dQw4w9WgXcQ",
+			);
+		});
+
 		// Shorts are first-class videos (G2): /shorts/{id} is a watchable video
 		// with the same id semantics as /watch?v=. Park, queue, play all work
 		// against /watch?v={id}; the Shorts id is an ordinary video id.
@@ -92,6 +98,10 @@ describe("Capture Predicates", () => {
 				extractYouTubeVideoId("https://youtube.com/channel/UC123"),
 			).toBeNull();
 			expect(extractYouTubeVideoId("https://google.com")).toBeNull();
+		});
+
+		it("does not treat a non-YouTube /watch URL as a YouTube video", () => {
+			expect(extractYouTubeVideoId("https://example.com/watch?v=not-youtube")).toBeNull();
 		});
 
 		it("returns null for empty or undefined input", () => {
@@ -155,7 +165,7 @@ describe("Capture Predicates", () => {
 	// (class-based anchors, no id nodes). The park button vanished on channel
 	// /videos grid + channel-home shelves while search still worked. These
 	// assert meta resolves across ALL three real layouts.
-	describe("resolveCardMeta (real captured fixtures)", () => {
+	describe("resolveCardMeta (captured and contract fixtures)", () => {
 		it("resolves search-page card (legacy ytd-video-renderer)", () => {
 			const meta = resolveCardMeta(cardFromFixture("card-search.html"));
 			expect(meta).not.toBeNull();
@@ -196,22 +206,11 @@ describe("Capture Predicates", () => {
 		});
 
 		// Shorts cards (ytd-reel-item-renderer) carry a /shorts/{id} anchor
-		// rather than /watch?v=. No live-captured Shorts fixture is available
-		// yet (spec G2 marks card-shorts.html as WAJIB/CRITICAL — follow-up),
-		// so these synthetic DOMs guard the two resolveVideoId paths a real
-		// fixture would settle: (1) the a#thumbnail fast-path when the
-		// thumbnail anchor IS /shorts/{id}; (2) the a[href*="/shorts/"]
-		// durable fallback when there is no id-anchor at all.
+		// rather than /watch?v=. The contract fixture guards the fast path;
+		// the following synthetic DOM guards the durable fallback when a live
+		// layout omits the id-based anchor.
 		it("resolves meta via a#thumbnail fast-path when the thumbnail anchor is /shorts/{id}", () => {
-			const { document } = parseHTML(
-				`<body><ytd-reel-item-renderer>
-					<a id="thumbnail" href="/shorts/dQw4w9WgXcQ">
-						<img src="https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg" />
-					</a>
-					<h3><a href="/shorts/dQw4w9WgXcQ">A Short Title</a></h3>
-				</ytd-reel-item-renderer></body>`,
-			);
-			const card = document.querySelector("ytd-reel-item-renderer")!;
+			const card = cardFromFixture("card-shorts.html");
 			const meta = resolveCardMeta(card);
 			expect(meta).not.toBeNull();
 			expect(meta?.videoId).toBe("dQw4w9WgXcQ");

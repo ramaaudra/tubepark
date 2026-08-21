@@ -4,7 +4,7 @@ Part of: `docs/ROADMAP.md` F6 · Grilling: `docs/grilling/f6-undo-popup.md`
 
 ## Problem Statement
 
-Popup `handleRemove` (`src/entrypoints/popup/App.svelte:103-106`) langsung memanggil `removeVideo` — commit seketika, tanpa jaring pengaman. Side Panel punya undo 5 detik (G5); popup tidak. Aksi yang sama (hapus), dua perilaku berbeda antar surface.
+Popup `handleRemove` uses the G5 background transaction instead of committing directly. The popup now has the same five-second Undo contract as the Side Panel while keeping the Undo affordance local to the initiating surface.
 
 ## Solution
 
@@ -18,26 +18,18 @@ Popup `handleRemove` pakai seam G5 D3: kirim `PENDING_REMOVE` ke background, mut
 
 ## Implementation Decisions
 
-- **Popup `handleRemove`** (`popup/App.svelte:103-106`) — ganti `removeVideo` langsung dengan seam G5 D3:
-  ```ts
-  async function handleRemove(video: ParkedVideo) {
-    chrome.runtime.sendMessage({ type: 'PENDING_REMOVE', video });
-    queue = queue.filter(v => v.id !== video.id);  // optimistis
-    capacity = { ...capacity, count: capacity.count - 1 };
-    // tampilkan toast undo
-  }
-  ```
-- **Undo handler** — `CANCEL_REMOVE` ke background, restore optimis.
+- **Popup `handleRemove`** (`popup/App.svelte`) — sends the full `(id, addedAt)` video identity through the G5 D3 seam, applies the visible removal optimistically, and enables Undo only after the background returns the operation ID.
+- **Undo handler** — `CANCEL_REMOVE` ke background dengan `operationId` + owner `popup`, restore optimis.
 - **Toast infra popup.** Popup 330px (`:233`), belum punya toast (hanya `flyChip` untuk park feedback, `:50`). Tambah toast undo fixed-bottom (pola side panel `:597`). Detail layout spec.
 - **D6 bulk tak berlaku** — popup hapus tunggal saja. Slot pending selalu 1 item. "Hapus Semua" hanya di Side Panel.
 - **D5 (undo menang vs cap)** — berlaku via background (D3). Popup hanya konsumen seam; tak implementasi D5 sendiri.
-- **Ditolak: tanpa undo (peran berbeda)** — inkonsisten; hapus popup permanen, side panel undo; aksi destruktif tetap layak jaring. Ditolak: undo survive popup close (undo di side panel untuk aksi popup) — side panel harus tahu pending dari surface lain, undo toast untuk aksi yang user tak lakukan di surface itu ("undo apa?"), kompleksitas broadcast/poll tinggi.
+- **Ditolak: tanpa undo (peran berbeda)** — inkonsisten; hapus popup permanen, side panel undo; aksi destruktif tetap layak jaring. Ditolak: undo survive popup close atau muncul di surface lain — setiap pending membawa owner, sehingga side panel tidak menampilkan Undo untuk aksi popup dan sebaliknya.
 
 ## Testing Decisions
 
 - **Unit test (pola storage.ts):** `pending-removal.ts` (spec G5) sudah menguji seam. F6 hanya wiring popup ke seam — verifikasi manual.
 - **Integration (manual):** hapus di popup → toast undo → klik undo → item kembali; hapus di popup → tutup popup (blur) → buka → item hilang (commit); hapus di popup → klik play item lain → popup tutup → item commit.
-- **Regression guard:** `storage.test.ts` (17 test) tak tersentuh (logika di `pending-removal.ts`).
+- **Regression guard:** `pending-removal.test.ts` covers the reducer and identity/ownership rules; popup wiring remains a browser-surface verification item.
 
 ## Dependencies
 

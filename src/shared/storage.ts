@@ -9,6 +9,8 @@ import {
 export { MAX_QUEUE_SIZE };
 import {
 	type PendingRemovalState,
+	type PendingRemovalOwner,
+	type PendingRemovalSummary,
 	visibleQueue,
 } from "./pending-removal";
 import { MSG } from "./messages";
@@ -16,6 +18,7 @@ import { MSG } from "./messages";
 export const STORAGE_KEYS = {
 	QUEUE: "tubepark_queue",
 	UI_STATE: "tubepark_ui_state",
+	PENDING_REMOVAL: "tubepark_pending_removal",
 } as const;
 
 /** A snapshot of the display view: the queue with pending removals filtered
@@ -24,6 +27,7 @@ export const STORAGE_KEYS = {
 export interface QueueState {
 	queue: ParkedVideo[];
 	capacity: CapacityState;
+	pending?: PendingRemovalSummary | null;
 }
 
 export function deriveCapacityState(
@@ -183,20 +187,22 @@ export async function getRawQueue(): Promise<ParkedVideo[]> {
  * capacity meter all read through it. Round-trips to the background, which owns
  * the pending set (D3/D4). Without chrome (tests), falls back to raw.
  */
-export async function getQueueState(): Promise<QueueState> {
+export async function getQueueState(owner?: PendingRemovalOwner): Promise<QueueState> {
 	if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
 		const queue = await getRawQueue();
-		return { queue, capacity: deriveCapacityState(queue.length) };
+		return { queue, capacity: deriveCapacityState(queue.length), pending: null };
 	}
 	return new Promise((resolve) => {
-		chrome.runtime.sendMessage({ type: MSG.GET_VISIBLE_QUEUE }, (res) => {
+		const message = owner ? { type: MSG.GET_VISIBLE_QUEUE, owner } : { type: MSG.GET_VISIBLE_QUEUE };
+		chrome.runtime.sendMessage(message, (res) => {
 			if (res && Array.isArray(res.queue)) {
 				resolve({
 					queue: res.queue,
 					capacity: res.capacity ?? deriveCapacityState(res.queue.length),
+					pending: res.pending ?? null,
 				});
 			} else {
-				resolve({ queue: [], capacity: deriveCapacityState(0) });
+				resolve({ queue: [], capacity: deriveCapacityState(0), pending: null });
 			}
 		});
 	});
@@ -310,9 +316,9 @@ export function togglePinned(id: string): Promise<QueueState> {
 	);
 }
 
-/** Immediate single delete (popup path — no grace period, no undo UI yet; F6
- * will switch this to PENDING_REMOVE). Serialized with pending commits by the
- * background. Responds with the display QueueState. */
+/** Immediate single delete for callers that intentionally bypass the Undo
+ * grace period. The popup's user-facing delete path uses `requestRemoval`.
+ * Serialized with pending commits by the background. */
 export function removeVideo(id: string): Promise<QueueState> {
 	return send(
 		{ type: MSG.REMOVE_NOW, id },
@@ -331,21 +337,24 @@ export function removeManyVideos(ids: string[]): Promise<QueueState> {
 	);
 }
 
-/** Start a grace-period removal for 1 or N videos (Side Panel delete + bulk
- * "Remove all"). The background commits any previous pending slot first, then
- * holds this one for 5s. Undo = `cancelRemoval`. Responds with the display
- * QueueState (pending items already hidden). */
-export function requestRemoval(videos: ParkedVideo[]): Promise<QueueState> {
+/** Start a grace-period removal for 1 or N videos. `owner` scopes the Undo
+ * summary to the initiating surface while the pending filter remains global.
+ * The background commits any previous pending slot first, then holds this one
+ * for 5s. */
+export function requestRemoval(
+	videos: ParkedVideo[],
+	owner: PendingRemovalOwner,
+): Promise<QueueState> {
 	return send(
-		{ type: MSG.PENDING_REMOVE, videos },
-		{ queue: [], capacity: deriveCapacityState(0) },
+		{ type: MSG.PENDING_REMOVE, videos, owner },
+		{ queue: [], capacity: deriveCapacityState(0), pending: null },
 		(res) => asQueueState(res),
 	);
 }
 
 /** Undo the current grace-period removal. The background clears the pending
- * slot (nothing was ever written — restore never fails, D1/D5). Responds with
- * the display QueueState (restored items visible again). */
+ * slot only when both operation and owner match (nothing was ever written —
+ * restore never fails, D1/D5). */
 export function mutateQueue(
 	action: "assignCollection" | "renameCollection" | "reorderPinned",
 	payload: Record<string, unknown>,
@@ -357,10 +366,26 @@ export function mutateQueue(
 	);
 }
 
-export function cancelRemoval(): Promise<QueueState> {
+export function cancelRemoval(
+	operationId: string | null,
+	owner: PendingRemovalOwner,
+): Promise<QueueState> {
 	return send(
-		{ type: MSG.CANCEL_REMOVE },
-		{ queue: [], capacity: deriveCapacityState(0) },
+		{ type: MSG.CANCEL_REMOVE, operationId, owner },
+		{ queue: [], capacity: deriveCapacityState(0), pending: null },
+		(res) => asQueueState(res),
+	);
+}
+
+/** Commit a pending removal when its owning surface closes. The operation id
+ * prevents an old popup instance from committing a newer request. */
+export function commitPending(
+	operationId: string | null,
+	owner: PendingRemovalOwner,
+): Promise<QueueState> {
+	return send(
+		{ type: MSG.COMMIT_PENDING, operationId, owner },
+		{ queue: [], capacity: deriveCapacityState(0), pending: null },
 		(res) => asQueueState(res),
 	);
 }
@@ -371,7 +396,8 @@ function asQueueState(res: unknown): QueueState {
 		return {
 			queue: q,
 			capacity: (res as QueueState).capacity ?? deriveCapacityState(q.length),
+			pending: (res as QueueState).pending ?? null,
 		};
 	}
-	return { queue: [], capacity: deriveCapacityState(0) };
+	return { queue: [], capacity: deriveCapacityState(0), pending: null };
 }

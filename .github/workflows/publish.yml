@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  verify:
+    name: Verify release package
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -26,30 +27,93 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify version match
-        run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          TAG_VERSION=${{ steps.version.outputs.VERSION }}
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "❌ Version mismatch: package.json=$PKG_VERSION tag=$TAG_VERSION"
-            exit 1
-          fi
+      - name: Verify runtime dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Run tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Build extension
         run: npm run build
 
+      - name: Verify manifest and version
+        env:
+          TAG_VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('.output/chrome-mv3/manifest.json', 'utf8'));
+          const tagVersion = process.env.TAG_VERSION;
+          if (pkg.version !== tagVersion || manifest.version !== tagVersion) {
+            throw new Error(`Version mismatch: package=${pkg.version}, manifest=${manifest.version}, tag=${tagVersion}`);
+          }
+          if (manifest.manifest_version !== 3) throw new Error('Manifest V3 is required');
+          if (manifest.minimum_chrome_version !== '114') throw new Error('Side Panel minimum Chrome version must remain 114');
+          const assertExact = (actual, expected, label) => {
+            const actualSorted = [...(actual ?? [])].sort();
+            const expectedSorted = [...expected].sort();
+            if (JSON.stringify(actualSorted) !== JSON.stringify(expectedSorted)) {
+              throw new Error(`${label} mismatch: ${JSON.stringify(actualSorted)}`);
+            }
+          };
+          assertExact(manifest.permissions, ['storage', 'contextMenus', 'sidePanel', 'alarms'], 'Manifest permissions');
+          assertExact(manifest.host_permissions, ['*://*.youtube.com/*', '*://youtu.be/*'], 'Manifest host permissions');
+          assertExact(manifest.optional_permissions, [], 'Manifest optional permissions');
+          console.log(`Verified Manifest V3 ${manifest.version}`);
+          NODE
+
       - name: Package extension
-        run: cd .output/chrome-mv3 && zip -r ../../extension.zip . && cd ../..
+        run: |
+          npm run zip
+          VERSION=$(node -p "require('./package.json').version")
+          ZIP_PATH=".output/tubepark-${VERSION}-chrome.zip"
+          test -f "$ZIP_PATH"
+          cp "$ZIP_PATH" extension.zip
 
       - name: Verify package structure
         run: |
-          if ! unzip -l extension.zip | grep -q "manifest.json"; then
-            echo "❌ manifest.json not found at zip root"
+          unzip -Z1 extension.zip | grep -qx 'manifest.json'
+          if unzip -Z1 extension.zip | grep -E '(^|/)(\.git|node_modules|\.env|CHROMEWEBSTORE\.md|README\.md|\.DS_Store)(/|$)|\.(map|test\.(js|ts)|spec\.(js|ts))$'; then
+            echo 'Forbidden development files found in package'
             exit 1
           fi
-          echo "✅ Package structure verified"
+          echo 'Package structure verified'
+
+      - name: Verify Web Store asset files
+        run: |
+          for asset in \
+            public/icon/128.png \
+            docs/images/sidepanel.webp \
+            docs/images/popup.webp \
+            docs/images/tubepark-promo-440x280.png \
+            docs/images/tubepark-promo-440x280-dark.png; do
+            test -s "$asset" || { echo "Missing Web Store asset: $asset"; exit 1; }
+          done
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tubepark-extension
+          path: extension.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish approved release
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: chrome-web-store-publish
+    steps:
+      - name: Download verified package
+        uses: actions/download-artifact@v4
+        with:
+          name: tubepark-extension
 
       - name: Upload and publish to Chrome Web Store
         uses: mnao305/chrome-extension-upload@v6.0.0

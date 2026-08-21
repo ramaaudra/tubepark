@@ -118,6 +118,7 @@ function fakeChrome() {
 	return {
 		tabs: {
 			query: vi.fn(),
+			sendMessage: vi.fn(),
 			update: vi.fn(),
 			create: vi.fn(),
 			remove: vi.fn(),
@@ -133,6 +134,28 @@ function fakeChrome() {
 }
 
 describe("RealTabOperations", () => {
+	describe("YouTube tab seam", () => {
+		it("queries all YouTube tabs through the adapter", async () => {
+			const chrome = fakeChrome();
+			chrome.tabs.query.mockResolvedValue([{ id: 1, url: "https://youtube.com" }]);
+
+			const ops = new RealTabOperations(chrome as any);
+			expect(await ops.getYouTubeTabs()).toEqual([{ id: 1, url: "https://youtube.com" }]);
+			expect(chrome.tabs.query).toHaveBeenCalledWith({
+				url: ["*://*.youtube.com/*", "*://youtu.be/*"],
+			});
+		});
+
+		it("routes content-script messages through the adapter", async () => {
+			const chrome = fakeChrome();
+			chrome.tabs.sendMessage.mockResolvedValue({ ok: true });
+
+			const ops = new RealTabOperations(chrome as any);
+			expect(await ops.sendMessage(7, { type: "PING" })).toEqual({ ok: true });
+			expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(7, { type: "PING" });
+		});
+	});
+
 	describe("getActiveTab", () => {
 		it("returns active tab info from chrome.tabs.query", async () => {
 			const chrome = fakeChrome();
@@ -151,6 +174,7 @@ describe("RealTabOperations", () => {
 			expect(chrome.tabs.query).toHaveBeenCalledWith({
 				active: true,
 				currentWindow: true,
+				url: ["*://*.youtube.com/*", "*://youtu.be/*"],
 			});
 		});
 
@@ -164,7 +188,7 @@ describe("RealTabOperations", () => {
 	});
 
 	describe("getWatchTabs", () => {
-		it("queries ALL windows (not currentWindow)", async () => {
+		it("queries YouTube hosts across ALL windows (not currentWindow)", async () => {
 			const chrome = fakeChrome();
 			chrome.tabs.query.mockResolvedValue([
 				{ id: 1, url: "https://youtube.com/watch?v=abc" },
@@ -174,7 +198,9 @@ describe("RealTabOperations", () => {
 			const ops = new RealTabOperations(chrome as any);
 			await ops.getWatchTabs();
 
-			expect(chrome.tabs.query).toHaveBeenCalledWith({});
+			expect(chrome.tabs.query).toHaveBeenCalledWith({
+				url: ["*://*.youtube.com/*", "*://youtu.be/*"],
+			});
 		});
 
 		it("filters tabs to YouTube watch URLs only", async () => {
@@ -182,14 +208,14 @@ describe("RealTabOperations", () => {
 			chrome.tabs.query.mockResolvedValue([
 				{ id: 1, url: "https://youtube.com/watch?v=abc" },
 				{ id: 2, url: "https://youtube.com/" },
-				{ id: 3, url: "https://google.com" },
+				{ id: 3, url: "https://youtu.be/short-id" },
+				{ id: 4, url: "https://google.com/watch?v=not-youtube" },
 			]);
 
 			const ops = new RealTabOperations(chrome as any);
 			const result = await ops.getWatchTabs();
 
-			expect(result).toHaveLength(1);
-			expect(result[0].id).toBe(1);
+			expect(result.map((tab) => tab.id)).toEqual([1, 3]);
 		});
 	});
 
@@ -205,7 +231,7 @@ describe("RealTabOperations", () => {
 	});
 
 	describe("openVideo", () => {
-		it("queries ALL windows for existing YouTube tab", async () => {
+		it("queries YouTube hosts across ALL windows for an existing tab", async () => {
 			const chrome = fakeChrome();
 			chrome.tabs.query.mockResolvedValue([
 				{ id: 10, url: "https://youtube.com/watch?v=existing", windowId: 1 },
@@ -214,7 +240,9 @@ describe("RealTabOperations", () => {
 			const ops = new RealTabOperations(chrome as any);
 			await ops.openVideo("newvideo");
 
-			expect(chrome.tabs.query).toHaveBeenCalledWith({});
+			expect(chrome.tabs.query).toHaveBeenCalledWith({
+				url: ["*://*.youtube.com/*", "*://youtu.be/*"],
+			});
 		});
 
 		it("updates existing YouTube tab and focuses its window", async () => {
@@ -331,6 +359,10 @@ describe("RealTabOperations", () => {
 			const result = await ops.getNowPlayingTab();
 
 			expect(result).toBeNull();
+			expect(chrome.tabs.query).toHaveBeenCalledWith({
+				active: true,
+				url: ["*://*.youtube.com/*", "*://youtu.be/*"],
+			});
 		});
 
 		it("returns tab info when active tab is YouTube watch URL", async () => {

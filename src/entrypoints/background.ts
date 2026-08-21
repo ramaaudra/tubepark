@@ -10,140 +10,276 @@ import {
 	removeManyPure,
 	deriveCapacityState,
 	MAX_QUEUE_SIZE,
+	STORAGE_KEYS,
 	type QueueState,
 } from "../shared/storage";
 import type { ParkedVideo } from "../shared/types";
 import { getUiState } from "../shared/storage";
 import {
 	type PendingRemovalState,
-	requestRemoval,
-	cancelRemoval,
-	commitRemoval,
+	type PendingRemovalOwner,
+	type PendingRemovalTarget,
+	commitPendingRemoval,
+	isPendingExpired,
+	normalizePendingRemoval,
+	pendingSummary,
+	startPendingRemoval,
 	visibleQueue,
 } from "../shared/pending-removal";
 import { MSG } from "../shared/messages";
-import { extractYouTubeVideoId, cleanYouTubeTitle } from "../shared/capture-predicates";
+import {
+	extractYouTubeVideoId,
+	cleanYouTubeTitle,
+} from "../shared/capture-predicates";
 import { MutationQueue } from "../shared/mutation-queue";
+import { tabOps } from "../shared/tab-operations";
+import { pendingRemovalOwnerFromMessage } from "../shared/pending-removal-message";
 
 const CONTEXT_MENU_ID = "tubepark-park-context-menu";
 
-/** Grace-period window before a pending deletion commits to storage. Kept
- * short (5s, inherited) so undo is reachable but the shadow-state window is
- * narrow. chrome.alarms is not an option — its minimum granularity is 30s+, far
- * above this window — so a service-worker setTimeout is used instead. The SW
- * idles out after ~30s, so a 5s timer completes before idle under normal
- * conditions; if the SW is killed early (memory pressure) the pending slot is
- * lost but the items remain in storage (no data loss — the deletion just does
- * not commit, which is the safe failure mode for a grace-period model). */
-const GRACE_MS = 5000;
-
-/** The sole pending removal slot, owned by the background (D3). In-memory only:
- * not persisted, so an SW restart clears it (items stay in storage — safe). */
-let pending: PendingRemovalState = null;
-let commitTimer: ReturnType<typeof setTimeout> | null = null;
+/** The user-facing grace period. The deadline is persisted; the timer is only
+ * an accelerator while the worker remains alive. A chrome.alarms safety-net
+ * and startup reconciliation cover worker/browser lifecycle gaps. */
+const PENDING_ALARM_NAME = "tubepark-pending-removal";
 const mutations = new MutationQueue();
 
-function clearTimer() {
-	if (commitTimer) {
-		clearTimeout(commitTimer);
-		commitTimer = null;
+async function loadPending(): Promise<PendingRemovalState> {
+	if (typeof chrome === "undefined" || !chrome.storage?.local) return null;
+	const data = await chrome.storage.local.get(STORAGE_KEYS.PENDING_REMOVAL);
+	return normalizePendingRemoval(data[STORAGE_KEYS.PENDING_REMOVAL]);
+}
+
+async function loadQueueAndPending(): Promise<{
+	raw: ParkedVideo[];
+	pending: PendingRemovalState;
+}> {
+	if (typeof chrome === "undefined" || !chrome.storage?.local) {
+		return { raw: [], pending: null };
+	}
+	const data = await chrome.storage.local.get([
+		STORAGE_KEYS.QUEUE,
+		STORAGE_KEYS.PENDING_REMOVAL,
+	]);
+	return {
+		raw: Array.isArray(data[STORAGE_KEYS.QUEUE]) ? data[STORAGE_KEYS.QUEUE] as ParkedVideo[] : [],
+		pending: normalizePendingRemoval(data[STORAGE_KEYS.PENDING_REMOVAL]),
+	};
+}
+
+async function savePending(state: PendingRemovalState): Promise<void> {
+	if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+	if (state) {
+		await chrome.storage.local.set({ [STORAGE_KEYS.PENDING_REMOVAL]: state });
+	} else {
+		await chrome.storage.local.remove(STORAGE_KEYS.PENDING_REMOVAL);
 	}
 }
 
-/** Remove the given ids from storage (the commit write). */
-async function updateBadge(): Promise<void> {
-	if (!chrome.action?.setBadgeText) return;
-	const state = await visibleState();
-	const color = state.capacity.status === "full" ? "#dc2626" : state.capacity.status === "warning" ? "#a16207" : "#15803d";
-	await chrome.action.setBadgeText({ text: state.queue.length ? String(state.queue.length) : "" });
-	await chrome.action.setBadgeBackgroundColor({ color });
+/** Persist queue + pending together when a new request supersedes an older
+ * request. The pending record is written in the same storage operation as the
+ * queue snapshot so a worker interruption cannot expose half a transition. */
+async function saveQueueAndPending(
+	queue: ParkedVideo[],
+	state: NonNullable<PendingRemovalState>,
+): Promise<void> {
+	if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+	await chrome.storage.local.set({
+		[STORAGE_KEYS.QUEUE]: queue,
+		[STORAGE_KEYS.PENDING_REMOVAL]: state,
+	});
 }
 
+async function saveQueueAndClearPending(queue: ParkedVideo[]): Promise<void> {
+	if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+	await chrome.storage.local.set({
+		[STORAGE_KEYS.QUEUE]: queue,
+		[STORAGE_KEYS.PENDING_REMOVAL]: null,
+	});
+}
+
+async function clearAlarm(): Promise<void> {
+	if (!chrome.alarms?.clear) return;
+	try {
+		await chrome.alarms.clear(PENDING_ALARM_NAME);
+	} catch {
+		/* alarms are a recovery aid; storage reconciliation remains authoritative */
+	}
+}
+
+async function schedulePending(state: NonNullable<PendingRemovalState>): Promise<void> {
+	await clearAlarm();
+	if (chrome.alarms?.create) {
+		try {
+			await chrome.alarms.create(PENDING_ALARM_NAME, { when: state.expiresAt });
+		} catch {
+			/* timer + startup reconciliation still provide a safe fallback */
+		}
+	}
+	setTimeout(() => {
+		void commitPendingForOperation(state.operationId, true, state.owner);
+	}, Math.max(0, state.expiresAt - Date.now()));
+}
+
+async function removeIdsFromStorage(ids: string[]): Promise<void> {
+	if (ids.length === 0) return;
+	const raw = await getRawQueue();
+	await saveQueue(removeManyPure(raw, ids));
+}
+
+/** Remove the given ids from storage (the commit write). */
 async function applyRemoval(ids: string[]): Promise<void> {
 	if (ids.length === 0) return;
-	await mutations.run(async () => {
-		const raw = await getRawQueue();
-		await saveQueue(removeManyPure(raw, ids));
+	await mutations.run(() => removeIdsFromStorage(ids));
+}
+
+async function commitPendingState(state: NonNullable<PendingRemovalState>): Promise<void> {
+	const { raw } = await loadQueueAndPending();
+	await saveQueueAndClearPending(commitPendingRemoval(raw, state));
+	await clearAlarm();
+}
+
+/** Recover an expired transaction while already inside MutationQueue. */
+async function recoverExpiredPendingUnsafe(): Promise<boolean> {
+	const state = await loadPending();
+	if (!state || !isPendingExpired(state)) return false;
+	await commitPendingState(state);
+	return true;
+}
+
+async function reconcileExpiredPending(): Promise<boolean> {
+	const recovered = await mutations.run(recoverExpiredPendingUnsafe);
+	if (recovered) await broadcastPendingChanged();
+	return recovered;
+}
+
+async function commitPendingForOperation(
+	operationId: string,
+	requireExpired: boolean,
+	owner: PendingRemovalOwner,
+): Promise<boolean> {
+	const committed = await mutations.run(async () => {
+		const state = await loadPending();
+		if (!state || state.operationId !== operationId || state.owner !== owner) return false;
+		if (requireExpired && !isPendingExpired(state)) return false;
+		await commitPendingState(state);
+		return true;
 	});
+	if (committed) await broadcastPendingChanged();
+	return committed;
+}
+
+async function cancelPendingForOperation(
+	operationId: string,
+	owner: PendingRemovalOwner,
+): Promise<boolean> {
+	const cancelled = await mutations.run(async () => {
+		const state = await loadPending();
+		if (!state || state.operationId !== operationId || state.owner !== owner) return false;
+		await savePending(null);
+		await clearAlarm();
+		return true;
+	});
+	if (cancelled) await broadcastPendingChanged();
+	return cancelled;
 }
 
 /** Snapshot the display view: raw queue with pending filtered out + capacity
  * from the filtered count. Every read-for-display goes through this. */
-async function visibleState(): Promise<QueueState> {
-	const raw = await getRawQueue();
+async function visibleState(owner?: PendingRemovalOwner): Promise<QueueState> {
+	const { raw, pending } = await loadQueueAndPending();
 	const queue = visibleQueue(raw, pending);
-	return { queue, capacity: deriveCapacityState(queue.length, MAX_QUEUE_SIZE) };
+	return {
+		queue,
+		capacity: deriveCapacityState(queue.length, MAX_QUEUE_SIZE),
+		pending: pendingSummary(pending, owner ?? null),
+	};
 }
 
 /** Start a grace-period removal for 1 or N videos. If a slot was already
  * pending, it is committed first (D2 — rapid A-then-B commits A permanently,
- * not silently cancels A). Then the new slot becomes pending and a 5s timer
- * is armed. Broadcasts PENDING_REMOVAL_CHANGED so every surface re-syncs. */
-async function startPending(videos: ParkedVideo[]): Promise<QueueState> {
-	const { commitNow: supersededIds, state } = requestRemoval(pending, videos);
-	if (supersededIds.length > 0) {
-		await applyRemoval(supersededIds);
-	}
-	pending = state;
-	clearTimer();
-	commitTimer = setTimeout(async () => {
-		const ids = commitRemoval(pending);
-		if (ids.length > 0) await applyRemoval(ids);
-		pending = null;
-		commitTimer = null;
-		broadcastPendingChanged();
-	}, GRACE_MS);
-	broadcastPendingChanged();
-	return visibleState();
+ * not silently cancels A). The transaction is persisted before the timer is
+ * armed so a worker restart can recover it. */
+async function startPending(
+	targets: PendingRemovalTarget[],
+	owner: PendingRemovalOwner,
+): Promise<QueueState> {
+	if (targets.length === 0) return visibleState(owner);
+	await mutations.run(async () => {
+		await recoverExpiredPendingUnsafe();
+		const { raw, pending: current } = await loadQueueAndPending();
+		const transition = startPendingRemoval(
+			raw,
+			current,
+			targets,
+			Date.now(),
+			undefined,
+			owner,
+		);
+		if (transition.pending === current && transition.rawQueue === raw) return;
+		if (!transition.pending) return;
+		await saveQueueAndPending(transition.rawQueue, transition.pending);
+		await schedulePending(transition.pending);
+	});
+	await broadcastPendingChanged();
+	return visibleState(owner);
 }
 
-/** Undo: clear the pending slot. Nothing was ever written to storage, so
- * restoring can never fail and never hits the cap (D1/D5). */
-function cancelPending(): void {
-	pending = cancelRemoval();
-	clearTimer();
-	broadcastPendingChanged();
+/** Recreate the best-effort timer/alarm after a worker restart and immediately
+ * commit a transaction whose absolute deadline already passed. */
+async function restorePendingLifecycle(): Promise<void> {
+	let recovered = false;
+	await mutations.run(async () => {
+		recovered = await recoverExpiredPendingUnsafe();
+		if (!recovered) {
+			const state = await loadPending();
+			if (state) await schedulePending(state);
+		}
+	});
+	if (recovered) await broadcastPendingChanged();
 }
 
 /** Broadcast the current pending set to extension pages (popup, side panel)
  * and YouTube content scripts. storage.onChanged does not fire during the
  * grace window (storage has not changed), so the content script's Set<videoId>
  * (F1) and the panel's undo toast both need this separate channel (D3). */
-function broadcastPendingChanged(): void {
+async function broadcastPendingChanged(): Promise<void> {
 	if (typeof chrome === "undefined" || !chrome.runtime) return;
+	const pending = await loadPending();
 	const pendingIds = pending ? pending.videos.map((v) => v.id) : [];
-	const payload = { type: MSG.PENDING_REMOVAL_CHANGED, pendingIds };
+	const payload = {
+		type: MSG.PENDING_REMOVAL_CHANGED,
+		pendingIds,
+		owner: pending?.owner ?? null,
+		pendingCount: pendingIds.length,
+	};
 
 	// Extension pages (popup, side panel) — ignore "no receiver" errors.
 	try {
-		chrome.runtime.sendMessage(payload, () => {
-			void chrome.runtime.lastError;
-		});
+		await chrome.runtime.sendMessage(payload);
 	} catch {
 		/* sender may be unavailable in some contexts */
 	}
 
 	// Content scripts in YouTube tabs (forward-compat for F1's parked-state Set;
 	// they currently ignore unknown messages, so this is safe to emit now).
-	if (chrome.tabs?.query) {
-		chrome.tabs
-			.query({ url: "*://*.youtube.com/*" })
-			.then((tabs) => {
-				for (const tab of tabs) {
-					if (!tab.id) continue;
-					try {
-						chrome.tabs.sendMessage(tab.id, payload, () => {
-							void chrome.runtime.lastError;
-						});
-					} catch {
-						/* tab may be gone */
-					}
-				}
-			})
-			.catch(() => {
-				/* query failed — non-fatal */
-			});
+	try {
+		const tabs = await tabOps.getYouTubeTabs();
+		for (const tab of tabs) {
+			if (typeof tab.id !== "number") continue;
+			await tabOps.sendMessage(tab.id, payload);
+		}
+	} catch {
+		/* query failed — non-fatal */
 	}
+}
+
+async function updateBadge(): Promise<void> {
+	if (!chrome.action?.setBadgeText) return;
+	await reconcileExpiredPending();
+	const state = await visibleState();
+	const color = state.capacity.status === "full" ? "#dc2626" : state.capacity.status === "warning" ? "#a16207" : "#15803d";
+	await chrome.action.setBadgeText({ text: state.queue.length ? String(state.queue.length) : "" });
+	await chrome.action.setBadgeBackgroundColor({ color });
 }
 
 /** Park one video through the mutation queue, attaching the active collection
@@ -153,8 +289,9 @@ function broadcastPendingChanged(): void {
  * drifted copies. Returns the ParkResult plus the collection the item was
  * filed under (the caller uses it for toast copy). */
 async function parkOne(payload: ParkedVideo) {
+	await reconcileExpiredPending();
 	return mutations.run(async () => {
-		const raw = await getRawQueue();
+		const { raw, pending } = await loadQueueAndPending();
 		const ui = await getUiState();
 		const filed: ParkedVideo = ui.activeCollection
 			? { ...payload, collection: ui.activeCollection }
@@ -169,24 +306,18 @@ async function parkOne(payload: ParkedVideo) {
  * Falls back to defaults when the CS is not loaded yet. */
 async function fetchTabMeta(tabId: number): Promise<{ channel: string; currentTime: number }> {
 	const FALLBACK_META = { channel: "YouTube", currentTime: 0 };
-	if (!chrome.tabs?.sendMessage) return FALLBACK_META;
-	return new Promise((resolve) => {
-		chrome.tabs.sendMessage(tabId, { type: MSG.GET_TAB_META }, (resp) => {
-			if (chrome.runtime.lastError || !resp || typeof resp !== "object") {
-				resolve(FALLBACK_META);
-				return;
-			}
-			const channel =
-				typeof (resp as { channel?: string }).channel === "string" && (resp as { channel?: string }).channel
-					? (resp as { channel?: string }).channel!
-					: FALLBACK_META.channel;
-			const currentTime =
-				typeof (resp as { currentTime?: number }).currentTime === "number"
-					? Math.floor((resp as { currentTime?: number }).currentTime!)
-					: 0;
-			resolve({ channel, currentTime });
-		});
-	});
+	const response = await tabOps.sendMessage<{ channel?: unknown; currentTime?: unknown }>(
+		tabId,
+		{ type: MSG.GET_TAB_META },
+	);
+	if (!response || typeof response !== "object") return FALLBACK_META;
+	const channel = typeof response.channel === "string" && response.channel
+		? response.channel
+		: FALLBACK_META.channel;
+	const currentTime = typeof response.currentTime === "number"
+		? Math.floor(response.currentTime)
+		: 0;
+	return { channel, currentTime };
 }
 
 /** Build a ParkedVideo for tab-park: title from the tab, channel + optional
@@ -204,6 +335,25 @@ function parkedFromTab(
 	};
 	if (meta.currentTime > 0) payload.resumeAt = meta.currentTime;
 	return payload;
+}
+
+function parsePendingRemovalTargets(message: unknown): PendingRemovalTarget[] {
+	if (!message || typeof message !== "object") return [];
+	const videos = (message as { videos?: unknown }).videos;
+	if (!Array.isArray(videos)) return [];
+	const seen = new Set<string>();
+	const targets: PendingRemovalTarget[] = [];
+	for (const value of videos) {
+		if (!value || typeof value !== "object") continue;
+		const candidate = value as { id?: unknown; addedAt?: unknown };
+		if (typeof candidate.id !== "string" || !Number.isFinite(candidate.addedAt)) continue;
+		const target = { id: candidate.id, addedAt: candidate.addedAt as number };
+		const key = `${target.id}\u0000${target.addedAt}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		targets.push(target);
+	}
+	return targets;
 }
 
 export default defineBackground(() => {
@@ -230,7 +380,7 @@ export default defineBackground(() => {
 					// on Reddit/Discord/etc., where no content script is loaded
 					// → silent fail. Scope to YouTube pages so the menu only
 					// appears where it can actually park (ADR-0001 amended).
-					documentUrlPatterns: ["*://*.youtube.com/*"],
+					documentUrlPatterns: ["*://*.youtube.com/*", "*://youtu.be/*"],
 				});
 			}
 		});
@@ -243,7 +393,7 @@ export default defineBackground(() => {
 
 					// Route through content script for metadata + feedback
 					if (tab?.id) {
-						chrome.tabs.sendMessage(tab.id, {
+						void tabOps.sendMessage(tab.id, {
 							type: MSG.CONTEXT_MENU_PARK,
 							videoId,
 							linkUrl: info.linkUrl,
@@ -252,6 +402,13 @@ export default defineBackground(() => {
 				}
 			});
 		}
+
+		if (chrome.alarms?.onAlarm) {
+			chrome.alarms.onAlarm.addListener((alarm) => {
+				if (alarm.name === PENDING_ALARM_NAME) void reconcileExpiredPending();
+			});
+		}
+		void restorePendingLifecycle();
 
 		chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 			if (message?.type === MSG.PARK_VIDEO_REQUEST) {
@@ -276,7 +433,11 @@ export default defineBackground(() => {
 					sendResponse(result);
 					const tabId = sender.tab?.id;
 					if ((result.success || result.duplicate) && typeof tabId === "number") {
-						chrome.tabs.remove(tabId, () => void chrome.runtime.lastError);
+						try {
+							await tabOps.closeTab(tabId);
+						} catch {
+							// The tab may have been closed or navigated away after capture.
+						}
 					}
 				})();
 				return true;
@@ -288,15 +449,8 @@ export default defineBackground(() => {
 			if (message?.type === MSG.PARK_ALL_OTHER_TABS) {
 				(async () => {
 					try {
-						const tabs = await chrome.tabs.query({});
-						const watchTabs = tabs.filter(
-							(t) => !!t.url && extractYouTubeVideoId(t.url) !== null,
-						);
-						const activeTabs = await chrome.tabs.query({
-							active: true,
-							currentWindow: true,
-						});
-						const activeTab = activeTabs.length > 0 ? activeTabs[0] : null;
+						const watchTabs = await tabOps.getWatchTabs();
+						const activeTab = await tabOps.getActiveTab();
 
 						let parked = 0;
 						let reachedCapacity = false;
@@ -313,7 +467,11 @@ export default defineBackground(() => {
 							if (result.success || result.duplicate) {
 								parked += 1;
 								if (tab.id) {
-									chrome.tabs.remove(tab.id, () => void chrome.runtime.lastError);
+									try {
+										await tabOps.closeTab(tab.id);
+									} catch {
+										// A tab can disappear while the background is processing the batch.
+									}
 								}
 							} else if (result.full) {
 								reachedCapacity = true;
@@ -331,41 +489,49 @@ export default defineBackground(() => {
 			}
 
 			if (message?.type === MSG.PENDING_REMOVE) {
+				const owner = pendingRemovalOwnerFromMessage(message.owner, sender);
 				(async () => {
-					const requestedIds: string[] = Array.isArray(message.ids)
-						? message.ids.filter((id: unknown): id is string => typeof id === "string")
-						: [];
-					const videos: ParkedVideo[] = requestedIds.length > 0
-						? (await getRawQueue()).filter((video) => requestedIds.includes(video.id))
-						: Array.isArray(message.videos) ? message.videos : [];
-					const state = await startPending(videos);
+					if (!owner) {
+						sendResponse(await visibleState());
+						return;
+					}
+					const state = await startPending(parsePendingRemovalTargets(message), owner);
 					sendResponse(state);
 				})();
 				return true;
 			}
 
 			if (message?.type === MSG.COMMIT_PENDING) {
+				const owner = pendingRemovalOwnerFromMessage(message.owner, sender);
 				(async () => {
-					const ids = commitRemoval(pending);
-					clearTimer();
-					pending = null;
-					if (ids.length > 0) await applyRemoval(ids);
-					broadcastPendingChanged();
-					sendResponse(await visibleState());
+					if (!owner || typeof message.operationId !== "string") {
+						sendResponse(await visibleState());
+						return;
+					}
+					await commitPendingForOperation(message.operationId, false, owner);
+					await reconcileExpiredPending();
+					sendResponse(await visibleState(owner));
 				})();
 				return true;
 			}
 
 			if (message?.type === MSG.CANCEL_REMOVE) {
+				const owner = pendingRemovalOwnerFromMessage(message.owner, sender);
 				(async () => {
-					cancelPending();
-					sendResponse(await visibleState());
+					if (!owner || typeof message.operationId !== "string") {
+						sendResponse(await visibleState());
+						return;
+					}
+					await cancelPendingForOperation(message.operationId, owner);
+					await reconcileExpiredPending();
+					sendResponse(await visibleState(owner));
 				})();
 				return true;
 			}
 
 			if (message?.type === MSG.TOGGLE_PINNED) {
 				(async () => {
+					await reconcileExpiredPending();
 					// Read-modify-write on RAW so a pending deletion is not dropped.
 					await mutations.run(async () => {
 						const raw = await getRawQueue();
@@ -378,6 +544,7 @@ export default defineBackground(() => {
 
 			if (message?.type === MSG.MUTATE_QUEUE) {
 				(async () => {
+					await reconcileExpiredPending();
 					await mutations.run(async () => {
 						const raw = await getRawQueue();
 						let next = raw;
@@ -393,6 +560,7 @@ export default defineBackground(() => {
 
 			if (message?.type === MSG.REMOVE_NOW) {
 				(async () => {
+					await reconcileExpiredPending();
 					// Immediate commit, no grace period (popup path). `ids` for bulk,
 					// `id` for single. Serialized with pending commits by the single
 					// writer — no cross-context write races.
@@ -411,8 +579,12 @@ export default defineBackground(() => {
 				message?.type === MSG.GET_VISIBLE_QUEUE ||
 				message?.type === MSG.GET_QUEUE
 			) {
+				const owner = message.owner === undefined
+					? undefined
+					: pendingRemovalOwnerFromMessage(message.owner, sender) ?? undefined;
 				(async () => {
-					sendResponse(await visibleState());
+					await reconcileExpiredPending();
+					sendResponse(await visibleState(owner));
 				})();
 				return true;
 			}

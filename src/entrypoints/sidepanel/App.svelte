@@ -33,27 +33,38 @@
   let menuOpen = $state(false);
   let menuPos = $state<{ top: number; left: number } | null>(null);
   let pendingCount = $state(0);
+  let pendingOperationId = $state<string | null>(null);
   let draggedId = $state<string | null>(null);
   let reduced = $state(false);
   let loading = $state(true);
   let loadError = $state(false);
   let hydrated = $state(false);
   let animateItems = $state(false);
+  let loadGeneration = 0;
   let renameInput = $state<HTMLInputElement | null>(null);
   let tabsScrollEl = $state<HTMLElement | null>(null);
   let tabMenuEl = $state<HTMLElement | null>(null);
   let tabMenuButtonEl = $state<HTMLButtonElement | null>(null);
   let tabMenuItemEl = $state<HTMLButtonElement | null>(null);
 
-  function applyState(state: QueueState) { queue = state.queue; capacity = state.capacity; }
+  function applyState(state: QueueState) {
+    queue = state.queue;
+    capacity = state.capacity;
+    pendingCount = state.pending?.count ?? 0;
+    pendingOperationId = state.pending?.operationId ?? null;
+  }
   async function loadData() {
+    const generation = ++loadGeneration;
     try {
-      applyState(await getQueueState());
+      const state = await getQueueState('sidepanel');
+      if (generation !== loadGeneration) return;
+      applyState(state);
       nowPlaying = await tabOps.getNowPlayingTab();
+      if (generation !== loadGeneration) return;
       loadError = false;
-    } catch {
-      loadError = true;
-    }
+	    } catch {
+	      if (generation === loadGeneration) loadError = true;
+	    }
   }
   async function persistUi() { await saveUiState({ activeCollection, grouping }); }
 
@@ -124,11 +135,12 @@
       }
     })();
     const storageListener = () => void loadData();
-    const activatedListener = () => void loadData();
-    const updatedListener = (_id: number, info: chrome.tabs.TabChangeInfo) => { if (info.url && extractYouTubeVideoId(info.url)) void loadData(); };
-    const messageListener = (message: { type?: string; pendingIds?: unknown }) => {
+    const unsubscribeTabChanges = tabOps.subscribeToTabChanges(
+      () => void loadData(),
+      (url) => { if (url && extractYouTubeVideoId(url)) void loadData(); },
+    );
+    const messageListener = (message: { type?: string }) => {
       if (message.type === MSG.PENDING_REMOVAL_CHANGED) {
-        pendingCount = Array.isArray(message.pendingIds) ? message.pendingIds.length : 0;
         void loadData();
       }
       return false;
@@ -154,8 +166,6 @@
       tabMenuButtonEl?.focus();
     };
     chrome.storage?.onChanged.addListener(storageListener);
-    chrome.tabs?.onActivated.addListener(activatedListener);
-    chrome.tabs?.onUpdated.addListener(updatedListener);
     chrome.runtime?.onMessage.addListener(messageListener);
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -164,8 +174,7 @@
     document.addEventListener('scroll', onScrollOrResize, true);
     return () => {
       chrome.storage?.onChanged.removeListener(storageListener);
-      chrome.tabs?.onActivated.removeListener(activatedListener);
-      chrome.tabs?.onUpdated.removeListener(updatedListener);
+      unsubscribeTabChanges();
       chrome.runtime?.onMessage.removeListener(messageListener);
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
@@ -196,9 +205,13 @@
     try { await persistUi(); } catch { grouping = previous; }
   }
 
-  async function remove(video: ParkedVideo) { applyState(await requestRemoval([video])); pendingCount = 1; }
-  async function removeGroup(videos: ParkedVideo[]) { applyState(await requestRemoval(videos)); pendingCount = videos.length; }
-  async function undo() { applyState(await cancelRemoval()); pendingCount = 0; }
+  async function remove(video: ParkedVideo) { applyState(await requestRemoval([video], 'sidepanel')); }
+  async function removeGroup(videos: ParkedVideo[]) { applyState(await requestRemoval(videos, 'sidepanel')); }
+  async function undo() {
+    const operationId = pendingOperationId;
+    if (!operationId) return;
+    applyState(await cancelRemoval(operationId, 'sidepanel'));
+  }
 
   function toggleSelecting() {
     if (selecting) {

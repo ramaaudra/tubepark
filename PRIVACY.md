@@ -1,7 +1,7 @@
 # Privacy Policy for TubePark
 
-**Last updated:** 20 July 2026
-**Effective date:** 20 July 2026
+**Last updated:** 21 August 2026
+**Effective date:** 21 August 2026
 
 TubePark is a browser extension that turns open YouTube tabs into a local, thumbnail-rich watch-later queue. This policy explains what information the extension handles and what it does **not** do.
 
@@ -20,7 +20,7 @@ When you park a video, TubePark saves a small metadata record for that video:
 | Channel | `"Lofi Girl"` | Add context to the queue item |
 | Added-at timestamp | `1721433600000` | Sort and group your queue by recency |
 
-To read this metadata, the extension also **temporarily accesses** the URLs and titles of your open browser tabs, so it can find YouTube videos to park and reopen them. This tab information is used in the moment and is **not** stored, logged, or transmitted anywhere.
+To read this metadata, the extension also **temporarily accesses** the URLs and titles of matching YouTube tabs, so it can find YouTube videos to park and reopen them. This tab information is used in the moment and is **not** stored, logged, or transmitted anywhere.
 
 TubePark does **not** collect, request, or store:
 
@@ -35,7 +35,7 @@ TubePark does **not** collect, request, or store:
 
 ## 2. How information is collected
 
-- **Directly from your actions.** Metadata is captured only when you explicitly park a video — by clicking the park button on a video card, using the "Park This Video" right-click menu, or parking a tab from the popup.
+- **Directly from your actions.** Metadata is captured only when you explicitly park a video — by clicking the park button on a video card, using the "Park This Video" right-click menu, parking a tab from the popup, or using the watch-page **Park & close tab** action.
 - **Locally, within your browser.** The extension reads video-card and tab data using the browser's extension APIs on your device. Nothing is sent to a remote server owned or operated by the developer.
 
 TubePark's own code makes **no network requests** — there is no `fetch`, no telemetry endpoint, and no external API that the extension calls.
@@ -61,7 +61,8 @@ All parked-video data is stored **on your device** in your browser's local exten
 
 - It is not uploaded to any server.
 - The developer has no access to it.
-- If your browser has profile sync enabled, storage may be synced across your own devices **by your browser**, under your browser vendor's privacy policy — not by TubePark.
+- TubePark uses local storage, not `chrome.storage.sync`; the queue is not synchronized across devices by TubePark.
+- A pending-removal transaction is kept locally during the five-second grace period and, if the background worker is interrupted, until its next recovery. It contains the same queue metadata plus a short-lived operation ID, surface owner, requested-at timestamp, and expiry timestamp; it is removed when the operation is committed or undone.
 
 ---
 
@@ -79,11 +80,12 @@ TubePark requests only the permissions required for its single purpose — manag
 
 | Permission | Why it is needed |
 | --- | --- |
-| `storage` | Save your parked-video queue locally on your device. |
-| `tabs` | Read the URL/title of open tabs to park YouTube videos and reopen them. |
+| `storage` | Save your parked-video queue and a short-lived Undo transaction locally on your device. |
 | `contextMenus` | Add the "Park This Video" option to the right-click menu on YouTube links. |
 | `sidePanel` | Show your queue in the browser's side panel. |
-| Host access to `*://*.youtube.com/*` | Detect video cards on YouTube pages so the park button can appear, and read a video's title and channel. |
+| `alarms` | Help finish a pending removal after the background worker is restarted; it is not used for tracking or scheduled notifications. |
+| Host access to `*://*.youtube.com/*` | Detect video cards on YouTube pages, read matching tab metadata, and show the park button. |
+| Host access to `*://youtu.be/*` | Keep shortened YouTube video links discoverable when they are open in a tab or used from a YouTube context-menu action. |
 
 TubePark requests **no access to any non-YouTube website**.
 

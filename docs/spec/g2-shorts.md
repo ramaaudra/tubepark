@@ -39,7 +39,7 @@ Shorts adalah warga kelas satu — di-park, di-queue, di-play sama dengan video 
 ## Testing Decisions
 
 - **Unit test (wajib, pola storage.ts):** `extractYouTubeVideoId` untuk `/shorts/ID`, `/shorts/ID?t=10`, `/shorts/ID/` (trailing slash). Pure function, tanpa browser.
-- **Fixture baru (wajib):** capture kartu `ytd-reel-item-renderer` dari YouTube nyata → `src/shared/__fixtures__/card-shorts.html`. Konfirmasi: (a) apakah anchor `a#thumbnail` punya href `/shorts/{id}` (fast-path cukup) atau `/watch?v=` (perlu fallback selector); (b) `resolveCardMeta` end-to-end mengembalikan meta yang benar.
+- **Fixture baru (wajib):** `src/shared/__fixtures__/card-shorts.html` pins the `ytd-reel-item-renderer` contract with an `a#thumbnail` `/shorts/{id}` anchor; a synthetic fallback test also covers cards without the id-based anchor. A live capture can be refreshed later if YouTube changes the Shorts DOM.
 - **Tidak menguji:** `openVideo` (tak berubah), thumbnail rendering (visual).
 
 ## Dependencies
@@ -49,7 +49,7 @@ Shorts adalah warga kelas satu — di-park, di-queue, di-play sama dengan video 
 
 ## Verification needed before implementation
 
-1. **Capture fixture Shorts** (kritikal) — tanpa ini, `resolveVideoId` fallback adalah tebakan. Bisa fast-path `a#thumbnail` ekstrak dari anchor `/shorts/`, atau perlu fallback selector `a[href*="/shorts/"]`.
+1. **Shorts fixture** — `card-shorts.html` confirms the `a#thumbnail` fast path, while the adjacent synthetic test protects the fallback selector `a[href*="/shorts/"]`. Refresh the contract fixture if a live YouTube capture shows a different structure.
 2. **Tab reuse mengganggu feed aktif** (🔒 open): setelah G2, tab Shorts yang sedang di-scroll dihitung watch tab → `openVideo` reuse ke `/watch`. Kalau user sedang aktif scroll feed, play dari queue mengganggu. Konfirmasi dapat diterima, atau perlu pengecualian (tab Shorts feed tak di-reuse, selalu buka tab baru). Belum diputuskan — default: ikut one-in-one-out (CONTEXT.md), bila terbukti mengganggu, buka sebagai amandemen.
 
 ## References

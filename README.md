@@ -109,7 +109,7 @@ TubePark is a small Manifest V3 extension with four moving parts:
 | **Popup** | Fast-action surface: park the current tab, park all tabs, glance at recent items. |
 | **Side Panel** | Persistent review workspace: grouped queue, pin, play, remove. |
 
-The queue lives in `chrome.storage.local` under `tubepark_queue`. A parked video is a minimal record — `id`, `title`, `channel`, `addedAt` — kept intentionally lightweight.
+The queue lives in `chrome.storage.local` under `tubepark_queue`. A parked video is a minimal record — `id`, `title`, `channel`, `addedAt` — kept intentionally lightweight. A short-lived `tubepark_pending_removal` transaction preserves the five-second Undo promise across service-worker restarts.
 
 > [!IMPORTANT]
 > Capturing metadata from YouTube is the hard part, because YouTube churns its DOM constantly. TubePark stays resilient by treating one invariant as the source of truth: *a video card always contains an `<a>` to `/watch?v=…`*. Id-based lookups are only a fast path; the anchor href is the fallback that survives redesigns.
@@ -118,8 +118,9 @@ The queue lives in `chrome.storage.local` under `tubepark_queue`. A parked video
 
 Key architectural choices are recorded as ADRs in [`docs/adr/`](docs/adr):
 
-- [0001](docs/adr/0001-context-menu-scoping.md) — scoping the context menu to YouTube watch links only.
-- [0002](docs/adr/0002-expiry-alarms.md) — planned auto-expire design via `chrome.alarms`; superseded, never implemented (queue trimming is manual only in the shipped MVP).
+- [0001](docs/adr/0001-context-menu-scoping.md) — scoping the context menu to YouTube video links and YouTube pages.
+- [0002](docs/adr/0002-expiry-alarms.md) — planned auto-expire design via `chrome.alarms`; superseded (queue trimming remains manual).
+- [0006](docs/adr/0006-durable-undo-transaction.md) — persist the single pending removal transaction and recover it by absolute expiry.
 - [0003](docs/adr/0003-thumbnails-dynamic.md) — resolving thumbnails dynamically instead of storing them.
 - [0004](docs/adr/0004-migrate-to-wxt.md) — adopting WXT as the build system.
 
@@ -141,7 +142,7 @@ npm run typecheck  # type-check without emitting
 ```
 src/
   entrypoints/
-    background.ts        # service worker: context menu + park requests
+    background.ts        # service worker: context menu + park + durable undo
     content.ts           # floating park button injected into YouTube
     popup/               # fast-action popup (Svelte)
     sidepanel/           # persistent review workspace (Svelte)

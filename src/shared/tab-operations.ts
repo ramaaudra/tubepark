@@ -1,4 +1,8 @@
-import { cleanYouTubeTitle, extractYouTubeVideoId } from "./capture-predicates";
+import {
+	cleanYouTubeTitle,
+	extractYouTubeVideoId,
+	YOUTUBE_TAB_URL_PATTERNS,
+} from "./capture-predicates";
 
 export interface SimpleTab {
 	id?: number;
@@ -28,7 +32,10 @@ export function buildWatchUrl(videoId: string, resumeAt?: number): string {
 
 export interface TabOperations {
 	getActiveTab(): Promise<{ id: number; url: string; title: string } | null>;
+	getYouTubeTabs(): Promise<SimpleTab[]>;
 	getWatchTabs(): Promise<SimpleTab[]>;
+	sendMessage<T = unknown>(id: number, message: unknown): Promise<T | undefined>;
+	subscribeToTabChanges(onActivated: () => void, onUpdated: (url?: string) => void): () => void;
 	closeTab(id: number): Promise<void>;
 	openVideo(videoId: string, resumeAt?: number): Promise<void>;
 	openSidePanel(): Promise<void>;
@@ -44,7 +51,11 @@ export class RealTabOperations implements TabOperations {
 
 	async getActiveTab() {
 		if (!this.c?.tabs) return null;
-		const tabs = await this.c.tabs.query({ active: true, currentWindow: true });
+		const tabs = await this.c.tabs.query({
+			active: true,
+			currentWindow: true,
+			url: [...YOUTUBE_TAB_URL_PATTERNS],
+		});
 		if (tabs.length === 0) return null;
 		const t = tabs[0];
 		return {
@@ -54,10 +65,36 @@ export class RealTabOperations implements TabOperations {
 		};
 	}
 
+	async getYouTubeTabs() {
+		if (!this.c?.tabs) return [];
+		return this.c.tabs.query({ url: [...YOUTUBE_TAB_URL_PATTERNS] });
+	}
+
 	async getWatchTabs() {
 		if (!this.c?.tabs) return [];
-		const tabs = await this.c.tabs.query({});
+		const tabs = await this.getYouTubeTabs();
 		return tabs.filter((t) => !!t.url && extractYouTubeVideoId(t.url) !== null);
+	}
+
+	async sendMessage<T = unknown>(id: number, message: unknown): Promise<T | undefined> {
+		if (!this.c?.tabs?.sendMessage) return undefined;
+		try {
+			return await this.c.tabs.sendMessage(id, message) as T;
+		} catch {
+			return undefined;
+		}
+	}
+
+	subscribeToTabChanges(onActivated: () => void, onUpdated: (url?: string) => void): () => void {
+		if (!this.c?.tabs) return () => undefined;
+		const activatedListener = () => onActivated();
+		const updatedListener = (_id: number, info: chrome.tabs.TabChangeInfo) => onUpdated(info.url);
+		this.c.tabs.onActivated?.addListener(activatedListener);
+		this.c.tabs.onUpdated?.addListener(updatedListener);
+		return () => {
+			this.c?.tabs?.onActivated?.removeListener(activatedListener);
+			this.c?.tabs?.onUpdated?.removeListener(updatedListener);
+		};
 	}
 
 	async closeTab(id: number) {
@@ -68,7 +105,7 @@ export class RealTabOperations implements TabOperations {
 	async openVideo(videoId: string, resumeAt?: number) {
 		if (!this.c?.tabs) return;
 		const targetUrl = buildWatchUrl(videoId, resumeAt);
-		const allTabs = await this.c.tabs.query({});
+		const allTabs = await this.c.tabs.query({ url: [...YOUTUBE_TAB_URL_PATTERNS] });
 
 		const existingWatchTab = allTabs.find((tab) => {
 			if (!tab.url) return false;
@@ -92,7 +129,10 @@ export class RealTabOperations implements TabOperations {
 
 	async getNowPlayingTab() {
 		if (!this.c?.tabs) return null;
-		const tabs = await this.c.tabs.query({ active: true });
+		const tabs = await this.c.tabs.query({
+			active: true,
+			url: [...YOUTUBE_TAB_URL_PATTERNS],
+		});
 		const ytTab = tabs.find(
 			(t) => t.active && t.url && extractYouTubeVideoId(t.url) !== null,
 		);
@@ -119,8 +159,11 @@ export class TestTabOperations implements TabOperations {
 	calls: { method: string; args: unknown[] }[] = [];
 
 	activeTab: { id: number; url: string; title: string } | null = null;
+	youtubeTabs: SimpleTab[] = [];
 	watchTabs: SimpleTab[] = [];
 	nowPlayingTab: NowPlayingTab | null = null;
+	messageResponse: unknown;
+	tabChangeCleanup = () => undefined;
 
 	async getActiveTab() {
 		this.calls.push({ method: "getActiveTab", args: [] });
@@ -130,6 +173,26 @@ export class TestTabOperations implements TabOperations {
 	async getWatchTabs() {
 		this.calls.push({ method: "getWatchTabs", args: [] });
 		return this.watchTabs;
+	}
+
+	async getYouTubeTabs() {
+		this.calls.push({ method: "getYouTubeTabs", args: [] });
+		return this.youtubeTabs;
+	}
+
+	async sendMessage<T = unknown>(id: number, message: unknown) {
+		this.calls.push({ method: "sendMessage", args: [id, message] });
+		return this.messageResponse as T | undefined;
+	}
+
+	subscribeToTabChanges(onActivated: () => void, onUpdated: (url?: string) => void) {
+		this.calls.push({ method: "subscribeToTabChanges", args: [] });
+		this.tabChangeCleanup = () => {
+			this.calls.push({ method: "unsubscribeFromTabChanges", args: [] });
+		};
+		void onActivated;
+		void onUpdated;
+		return this.tabChangeCleanup;
 	}
 
 	async closeTab(id: number) {
